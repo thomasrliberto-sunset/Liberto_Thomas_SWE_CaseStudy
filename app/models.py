@@ -88,6 +88,17 @@ class ValuationPoint(BaseModel):
     pe: float | None
 
 
+class TrailingTwelveMonths(BaseModel):
+    period_start: date
+    period_end: date
+    eps_diluted: float | None
+    revenue: float | None
+    pe: float | None = Field(description="None when TTM EPS <= 0")
+    price_to_sales: float | None
+    through_filing: str | None = Field(description="10-Q whose year-to-date figures roll the fiscal year forward")
+    method: str
+
+
 class Valuation(BaseModel):
     ticker: str
     price: float
@@ -103,6 +114,9 @@ class Valuation(BaseModel):
     diluted_shares_adjusted: float | None
     market_cap_approx: float | None = Field(description="price x FY weighted-average diluted shares")
     price_to_sales: float | None
+    ttm: TrailingTwelveMonths | None = Field(
+        None, description="Same multiples on trailing-twelve-month figures (latest FY + 10-Q YTD - prior YTD)"
+    )
     notes: list[str]
     history: list[ValuationPoint] = Field(description="P/E at each fiscal year end")
 

@@ -4,6 +4,7 @@ import pytest
 
 from app.services.filings import compare_risk_factors, to_or_tsquery
 from app.services.metrics import consecutive_years, fmt_value, pe_ratio, split_factor, yoy_growth
+from app.services.ttm import YtdFact, trailing_twelve_months
 
 
 def test_yoy_growth():
@@ -71,3 +72,24 @@ def test_risk_factor_diff_classifies_new_modified_removed():
 def test_or_tsquery_is_sanitized():
     assert to_or_tsquery("What drove Azure's growth?!") == "what | drove | azure | growth"
     assert to_or_tsquery("a !") is None
+
+
+def test_ttm_rolls_fiscal_year_forward_with_ytd_and_adjusts_splits():
+    # FY ends 2025-09-27 (Apple-style 52/53-week year); 9-month YTD through 2026-06-27
+    ytd = [
+        YtdFact(date(2025, 9, 28), date(2025, 12, 27), 2.84, date(2026, 1, 30), "Q1"),  # 3-month: shorter, ignored
+        YtdFact(date(2025, 9, 28), date(2026, 6, 27), 6.72, date(2026, 8, 1), "Q3"),  # current YTD
+        YtdFact(date(2024, 9, 29), date(2025, 6, 28), 5.46, date(2026, 8, 1), "Q3"),  # prior-year comparative
+    ]
+    t = trailing_twelve_months(date(2024, 9, 29), date(2025, 9, 27), 7.46, date(2025, 10, 31), ytd)
+    assert t.value == pytest.approx(7.46 + 6.72 - 5.46)
+    assert t.period_end == date(2026, 6, 27) and t.ytd_months == 9 and t.source_accession == "Q3"
+
+    # a 2-for-1 split after the 10-K but before the 10-Q: the FY figure is halved to today's basis
+    split = [(date(2026, 3, 1), 2.0)]
+    t2 = trailing_twelve_months(date(2024, 9, 29), date(2025, 9, 27), 7.46, date(2025, 10, 31), ytd, split)
+    assert t2.fy_value == pytest.approx(3.73)
+
+    # no 10-Q since the 10-K: TTM is just the fiscal year
+    t3 = trailing_twelve_months(date(2024, 9, 29), date(2025, 9, 27), 7.46, date(2025, 10, 31), [])
+    assert t3.is_annual_only and t3.value == pytest.approx(7.46)

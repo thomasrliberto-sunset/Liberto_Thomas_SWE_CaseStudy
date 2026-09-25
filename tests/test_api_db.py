@@ -63,6 +63,20 @@ def test_search_and_risk_diff(client):
     assert diff["counts"]["latest"] > 10
 
 
+def test_valuation_has_ttm_when_a_10q_follows_the_10k(client):
+    v = client.get("/companies/AAPL/valuation").json()
+    assert v["ttm"] is not None and v["ttm"]["period_end"] > v["eps_period_end"]
+    assert v["ttm"]["pe"] == pytest.approx(v["price"] / v["ttm"]["eps_diluted"])
+
+
+def test_quality_report_discloses_fallbacks(client):
+    q = client.get("/companies/ETN/quality").json()
+    checks = {c["check"]: c for c in q["checks"]}
+    assert checks["accounting_identities"]["status"] == "ok"
+    assert "operating_income = gross_profit - sga_expense - rnd_expense" in checks["derived_metrics"]["detail"]
+    assert "title-heading fallback" in checks["filing_text"]["detail"]
+
+
 def test_errors(client):
     assert client.get("/companies/TSLA/fundamentals").status_code == 404
     assert client.get("/compare/not_a_metric").status_code == 400

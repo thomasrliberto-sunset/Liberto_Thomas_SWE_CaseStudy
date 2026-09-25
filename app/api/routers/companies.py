@@ -6,7 +6,7 @@ from fastapi import APIRouter, Query
 
 from app.api.deps import Conn, csv_list
 from app.models import CompanySummary, Fundamentals, InsiderSummary, PriceSeries, Valuation
-from app.services import companies, fundamentals, insiders, market
+from app.services import companies, fundamentals, insiders, market, quality
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -46,3 +46,10 @@ def get_prices(
 @router.get("/{ticker}/insiders", response_model=InsiderSummary, summary="Form 4 insider activity (bonus)")
 def get_insiders(ticker: str, conn: Conn, days: int = Query(365, ge=7, le=730)):
     return insiders.insider_summary(conn, ticker, days)
+
+
+@router.get(
+    "/{ticker}/quality", response_model=quality.QualityReport, summary="Data-quality checks on what was ingested"
+)
+def get_quality(ticker: str, conn: Conn):
+    return quality.quality_report(conn, ticker)

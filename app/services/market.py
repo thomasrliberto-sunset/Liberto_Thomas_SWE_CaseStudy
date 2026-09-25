@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import date
 
 from app.db.connection import DbConn
-from app.models import NotFound, PriceBar, PriceSeries, Valuation, ValuationPoint
+from app.models import NotFound, PriceBar, PriceSeries, TrailingTwelveMonths, Valuation, ValuationPoint
 from app.services.companies import get_company
 from app.services.metrics import pe_ratio, safe_ratio, split_factor
+from app.services.ttm import TTM, YtdFact, trailing_twelve_months
 
 
 def get_prices(
@@ -47,11 +48,32 @@ def get_prices(
 def _annual(conn: DbConn, company_id: int, metric: str) -> list[dict]:
     return conn.execute(
         """
-        SELECT fiscal_year, period_end, value::float8 AS value, filed, accession
+        SELECT fiscal_year, period_start, period_end, value::float8 AS value, filed, accession, source_concept, unit
         FROM annual_financial WHERE company_id = %s AND metric = %s ORDER BY fiscal_year DESC
         """,
         (company_id, metric),
     ).fetchall()
+
+
+def _ttm(conn: DbConn, company_id: int, fy_row: dict | None, splits: list[tuple[date, float]]) -> TTM | None:
+    """Roll a reported annual metric forward with 10-Q year-to-date facts for the same concept."""
+    if not fy_row or not fy_row["source_concept"] or not fy_row["period_start"]:
+        return None  # derived metrics have no single concept to roll forward
+    taxonomy, concept = fy_row["source_concept"].split(":", 1)
+    rows = conn.execute(
+        """
+        SELECT period_start, period_end, value::float8 AS value, filed, accession
+        FROM xbrl_fact
+        WHERE company_id = %s AND taxonomy = %s AND concept = %s AND unit = %s
+          AND form IN ('10-Q', '10-Q/A') AND period_start IS NOT NULL AND period_end > %s
+            - interval '400 days'
+        """,
+        (company_id, taxonomy, concept, fy_row["unit"], fy_row["period_end"]),
+    ).fetchall()
+    facts = [YtdFact(r["period_start"], r["period_end"], r["value"], r["filed"], r["accession"]) for r in rows]
+    return trailing_twelve_months(
+        fy_row["period_start"], fy_row["period_end"], fy_row["value"], fy_row["filed"], facts, splits
+    )
 
 
 def get_valuation(conn: DbConn, ticker: str, history_years: int = 5) -> Valuation:
@@ -88,10 +110,30 @@ def get_valuation(conn: DbConn, ticker: str, history_years: int = 5) -> Valuatio
     shares_adj = shares["value"] * split_factor(splits, shares["filed"]) if shares else None
     market_cap = px["close"] * shares_adj if shares_adj else None
 
+    ttm_eps = _ttm(conn, cid, eps, splits)
+    ttm_rev = _ttm(conn, cid, revenue, splits)
+    ttm = None
+    if ttm_eps and not ttm_eps.is_annual_only:
+        rev_value = ttm_rev.value if ttm_rev and ttm_rev.period_end == ttm_eps.period_end else None
+        ttm = TrailingTwelveMonths(
+            period_start=ttm_eps.period_start,
+            period_end=ttm_eps.period_end,
+            eps_diluted=ttm_eps.value,
+            revenue=rev_value,
+            pe=pe_ratio(px["close"], ttm_eps.value),
+            price_to_sales=safe_ratio(market_cap, rev_value),
+            through_filing=ttm_eps.source_accession,
+            method=(
+                f"FY{eps['fiscal_year']} + {ttm_eps.ytd_months}-month YTD from the latest 10-Q - the same "
+                "period a year earlier. TTM EPS sums EPS across periods (standard approximation)."
+            ),
+        )
+
     notes = [
         f"Price is the {px['source']} close on {px['date'].isoformat()} (latest in the database).",
-        f"EPS is diluted EPS for FY{eps['fiscal_year']} (period ended {eps['period_end'].isoformat()}), "
-        "the latest annual figure; trailing-twelve-month EPS from 10-Qs is not used.",
+        f"trailing_pe uses diluted EPS for FY{eps['fiscal_year']} (period ended {eps['period_end'].isoformat()}), "
+        "the latest annual figure"
+        + (f"; `ttm` rolls it forward to {ttm.period_end.isoformat()} with 10-Q data." if ttm else "."),
     ]
     if factor != 1.0:
         notes.append(f"EPS divided by {factor:g} for stock splits after the 10-K was filed.")
@@ -136,6 +178,7 @@ def get_valuation(conn: DbConn, ticker: str, history_years: int = 5) -> Valuatio
         diluted_shares_adjusted=shares_adj,
         market_cap_approx=market_cap,
         price_to_sales=safe_ratio(market_cap, revenue["value"] if revenue else None),
+        ttm=ttm,
         notes=notes,
         history=history,
     )

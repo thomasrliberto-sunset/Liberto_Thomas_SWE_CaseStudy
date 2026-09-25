@@ -169,6 +169,17 @@ def _valuation(conn, args, ledger: SourceLedger):
                 "trailing_pe": f"{v.trailing_pe:.1f}x" if v.trailing_pe else "not meaningful",
                 "price_to_sales": f"{v.price_to_sales:.1f}x" if v.price_to_sales else None,
                 "market_cap_approx": fmt_money(v.market_cap_approx),
+                "ttm": (
+                    {
+                        "period": f"{v.ttm.period_start} to {v.ttm.period_end}",
+                        "eps_diluted": f"${v.ttm.eps_diluted:,.2f}" if v.ttm.eps_diluted is not None else None,
+                        "trailing_pe": f"{v.ttm.pe:.1f}x" if v.ttm.pe else "not meaningful",
+                        "price_to_sales": f"{v.ttm.price_to_sales:.1f}x" if v.ttm.price_to_sales else None,
+                        "method": v.ttm.method,
+                    }
+                    if v.ttm
+                    else "not available: no 10-Q filed since the latest 10-K"
+                ),
                 "pe_at_fiscal_year_ends": [
                     {"fiscal_year": h.fiscal_year, "pe": f"{h.pe:.1f}x" if h.pe else None} for h in v.history
                 ],
@@ -330,7 +341,8 @@ def build_tools(tickers: list[str]) -> dict[str, ToolSpec]:
         ToolSpec(
             "get_valuation",
             "Trailing P/E and P/S: latest stored closing price joined with the latest annual diluted EPS and "
-            "revenue from the 10-K (split-adjusted), plus P/E at past fiscal year ends.",
+            "revenue from the 10-K (split-adjusted), the same multiples on trailing-twelve-month figures "
+            "rolled forward with 10-Q data, and P/E at past fiscal year ends.",
             {"type": "object", "properties": {"tickers": ticker_list}, "required": ["tickers"]},
             _valuation,
             "numbers",
