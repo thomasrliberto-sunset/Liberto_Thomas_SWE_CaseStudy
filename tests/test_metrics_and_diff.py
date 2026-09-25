@@ -49,14 +49,20 @@ def test_risk_factor_diff_classifies_new_modified_removed():
     ]
     cur = [
         rf("Competition could adversely impact our market share.", "competitors " + shared_body),
-        rf("Reliance on a limited number of partners for manufacturing could harm us.",
-           "suppliers foundry capacity wafers lead times " * 10),  # reworded title, same body
-        rf("Commercial arrangements expose us to counterparty risks.",
-           "financing guarantees customers partners counterparty credit default buildout " * 10),
+        rf(
+            "Reliance on a limited number of partners for manufacturing could harm us.",
+            "suppliers foundry capacity wafers lead times " * 10,
+        ),  # reworded title, same body
+        rf(
+            "Commercial arrangements expose us to counterparty risks.",
+            "financing guarantees customers partners counterparty credit default buildout " * 10,
+        ),
     ]
     new, modified, removed, unchanged = compare_risk_factors(cur, old)
     assert unchanged == 1
-    assert [m.heading for m in modified] == ["Reliance on a limited number of partners for manufacturing could harm us."]
+    assert [m.heading for m in modified] == [
+        "Reliance on a limited number of partners for manufacturing could harm us."
+    ]
     assert modified[0].matched_prior_heading == "We depend on a limited number of suppliers."
     assert [n.heading for n in new] == ["Commercial arrangements expose us to counterparty risks."]
     assert [r.heading for r in removed] == ["Pandemics could disrupt our operations."]

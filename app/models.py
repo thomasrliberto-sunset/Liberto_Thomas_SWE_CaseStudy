@@ -261,9 +261,12 @@ class ToolCallTrace(BaseModel):
     error: str | None = None
 
 
+CitationKind = Literal["financials", "comparison", "valuation", "prices", "filing_text", "risk_diff", "insiders"]
+
+
 class Citation(BaseModel):
     id: str
-    kind: Literal["financials", "comparison", "valuation", "prices", "filing_text", "risk_diff", "insiders"]
+    kind: CitationKind
     ticker: str | None = None
     description: str
     url: str | None = None

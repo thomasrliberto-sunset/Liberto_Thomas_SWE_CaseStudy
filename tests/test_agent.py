@@ -14,8 +14,16 @@ from app.agent.tools import ToolSpec
 from app.models import CompanySummary
 
 COMPANIES = [
-    CompanySummary(ticker=t, name=n, cik=i, fiscal_year_end="1231", fiscal_years_available=[2024, 2025],
-                   tenk_fiscal_years=[2025, 2024], latest_price_date=date(2026, 9, 25), insider_transactions=0)
+    CompanySummary(
+        ticker=t,
+        name=n,
+        cik=i,
+        fiscal_year_end="1231",
+        fiscal_years_available=[2024, 2025],
+        tenk_fiscal_years=[2025, 2024],
+        latest_price_date=date(2026, 9, 25),
+        insider_transactions=0,
+    )
     for i, (t, n) in enumerate([("NVDA", "NVIDIA"), ("MSFT", "Microsoft"), ("AAPL", "Apple")], start=1)
 ]
 
@@ -28,15 +36,23 @@ class FakeLLM:
         self.calls = []
 
     def chat(self, messages, tools=None, json_mode=False, model=None):
-        self.calls.append({"messages": messages, "tools": [t["function"]["name"] for t in tools or []],
-                           "json_mode": json_mode})
+        self.calls.append(
+            {"messages": messages, "tools": [t["function"]["name"] for t in tools or []], "json_mode": json_mode}
+        )
         step = self.script.pop(0)
         if isinstance(step, dict):  # router JSON
             return ChatResult(content=json.dumps(step), tool_calls=[], raw_message={"role": "assistant"})
         if isinstance(step, list):  # tool calls
-            calls = [ToolCall(id=f"c{i}", name=n, arguments=a, raw_arguments=json.dumps(a)) for i, (n, a) in enumerate(step)]
-            raw = {"role": "assistant", "tool_calls": [
-                {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.raw_arguments}} for c in calls]}
+            calls = [
+                ToolCall(id=f"c{i}", name=n, arguments=a, raw_arguments=json.dumps(a)) for i, (n, a) in enumerate(step)
+            ]
+            raw = {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": c.raw_arguments}}
+                    for c in calls
+                ],
+            }
             return ChatResult(content=None, tool_calls=calls, raw_message=raw)
         return ChatResult(content=step, tool_calls=[], raw_message={"role": "assistant", "content": step})
 
@@ -67,8 +83,16 @@ def _patch(monkeypatch):
 
 
 def test_out_of_scope_is_declined_without_tool_calls():
-    llm = FakeLLM([{"route": "out_of_scope", "tickers": [], "rationale": "guidance",
-                    "out_of_scope_reason": "Forward guidance is not in 10-K filings or XBRL data."}])
+    llm = FakeLLM(
+        [
+            {
+                "route": "out_of_scope",
+                "tickers": [],
+                "rationale": "guidance",
+                "out_of_scope_reason": "Forward guidance is not in 10-K filings or XBRL data.",
+            }
+        ]
+    )
     resp = Agent(llm).ask(None, "What is the company's forward guidance for next quarter?")
     assert resp.route.route == "out_of_scope"
     assert resp.tool_calls == [] and len(llm.calls) == 1
@@ -89,12 +113,17 @@ def test_invalid_router_json_is_repaired_once():
 
 
 def test_route_scopes_the_toolset_and_answer_is_grounded():
-    llm = FakeLLM([
-        {"route": "both", "tickers": ["MSFT"], "rationale": "growth + attribution"},
-        [("get_financials", {"tickers": ["MSFT"]}), ("search_filings", {"ticker": "MSFT", "query": "revenue increased"})],
-        "Revenue grew 14.9% to $281.72B in FY2025 [F1]; management attributed the $36.6 billion increase "
-        "to Microsoft Cloud [S1].",
-    ])
+    llm = FakeLLM(
+        [
+            {"route": "both", "tickers": ["MSFT"], "rationale": "growth + attribution"},
+            [
+                ("get_financials", {"tickers": ["MSFT"]}),
+                ("search_filings", {"ticker": "MSFT", "query": "revenue increased"}),
+            ],
+            "Revenue grew 14.9% to $281.72B in FY2025 [F1]; management attributed the $36.6 billion increase "
+            "to Microsoft Cloud [S1].",
+        ]
+    )
     resp = Agent(llm).ask(None, "How did MSFT's revenue grow last year and why?")
     assert set(llm.calls[1]["tools"]) == {"get_financials", "search_filings"}
     assert [t.name for t in resp.tool_calls] == ["get_financials", "search_filings"]
@@ -103,11 +132,13 @@ def test_route_scopes_the_toolset_and_answer_is_grounded():
 
 
 def test_numbers_route_cannot_use_text_tools():
-    llm = FakeLLM([
-        {"route": "numbers", "tickers": ["MSFT"], "rationale": "revenue"},
-        [("search_filings", {"ticker": "MSFT", "query": "x"})],
-        "I could not retrieve that.",
-    ])
+    llm = FakeLLM(
+        [
+            {"route": "numbers", "tickers": ["MSFT"], "rationale": "revenue"},
+            [("search_filings", {"ticker": "MSFT", "query": "x"})],
+            "I could not retrieve that.",
+        ]
+    )
     resp = Agent(llm).ask(None, "MSFT revenue?")
     assert llm.calls[1]["tools"] == ["get_financials"]
     assert resp.tool_calls[0].ok is False and resp.tool_calls[0].error == "not available"

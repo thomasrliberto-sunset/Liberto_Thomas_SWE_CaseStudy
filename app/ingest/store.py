@@ -6,8 +6,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import date
 
-import psycopg
-
+from app.db.connection import DbConn, one
 from app.ingest.edgar import CompanyInfo, FilingRef
 from app.ingest.insiders import InsiderTx
 from app.ingest.prices import PriceHistory
@@ -19,9 +18,10 @@ def _r(x: float | None, digits: int = 4) -> float | None:
     return None if x is None else round(x, digits)
 
 
-def upsert_company(conn: psycopg.Connection, info: CompanyInfo) -> int:
-    row = conn.execute(
-        """
+def upsert_company(conn: DbConn, info: CompanyInfo) -> int:
+    row = one(
+        conn.execute(
+            """
         INSERT INTO company (ticker, cik, name, fiscal_year_end, sic_description)
         VALUES (%s, %s, %s, %s, %s)
         ON CONFLICT (ticker) DO UPDATE SET
@@ -29,12 +29,13 @@ def upsert_company(conn: psycopg.Connection, info: CompanyInfo) -> int:
             sic_description = EXCLUDED.sic_description, updated_at = now()
         RETURNING id
         """,
-        (info.ticker, info.cik, info.name, info.fiscal_year_end, info.sic_description),
-    ).fetchone()
+            (info.ticker, info.cik, info.name, info.fiscal_year_end, info.sic_description),
+        )
+    )
     return row["id"]
 
 
-def replace_xbrl_facts(conn: psycopg.Connection, company_id: int, facts: Iterable[Fact]) -> int:
+def replace_xbrl_facts(conn: DbConn, company_id: int, facts: Iterable[Fact]) -> int:
     conn.execute("DELETE FROM xbrl_fact WHERE company_id = %s", (company_id,))
     rows, seen = [], set()
     for f in facts:
@@ -42,8 +43,23 @@ def replace_xbrl_facts(conn: psycopg.Connection, company_id: int, facts: Iterabl
         if key in seen:  # companyfacts occasionally repeats a fact under two frames
             continue
         seen.add(key)
-        rows.append((company_id, f.taxonomy, f.concept, f.unit, f.start, f.end, f.value,
-                     f.fy, f.fp, f.form, f.accession, f.filed, f.frame))
+        rows.append(
+            (
+                company_id,
+                f.taxonomy,
+                f.concept,
+                f.unit,
+                f.start,
+                f.end,
+                f.value,
+                f.fy,
+                f.fp,
+                f.form,
+                f.accession,
+                f.filed,
+                f.frame,
+            )
+        )
     with conn.cursor() as cur:
         # executemany runs in pipeline mode in psycopg 3; fast enough for ~30k rows/company
         cur.executemany(
@@ -54,7 +70,7 @@ def replace_xbrl_facts(conn: psycopg.Connection, company_id: int, facts: Iterabl
     return len(rows)
 
 
-def replace_annual_financials(conn: psycopg.Connection, company_id: int, values: list[AnnualValue]) -> int:
+def replace_annual_financials(conn: DbConn, company_id: int, values: list[AnnualValue]) -> int:
     conn.execute("DELETE FROM annual_financial WHERE company_id = %s", (company_id,))
     with conn.cursor() as cur:
         cur.executemany(
@@ -64,16 +80,26 @@ def replace_annual_financials(conn: psycopg.Connection, company_id: int, values:
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             [
-                (company_id, v.metric, v.fiscal_year, v.start, v.end, v.value, v.unit,
-                 v.source_concept, v.derivation, v.accession, v.filed)
+                (
+                    company_id,
+                    v.metric,
+                    v.fiscal_year,
+                    v.start,
+                    v.end,
+                    v.value,
+                    v.unit,
+                    v.source_concept,
+                    v.derivation,
+                    v.accession,
+                    v.filed,
+                )
                 for v in values
             ],
         )
     return len(values)
 
 
-def fiscal_year_for_period(conn: psycopg.Connection, company_id: int, period_end: date | None,
-                           accession: str) -> int | None:
+def fiscal_year_for_period(conn: DbConn, company_id: int, period_end: date | None, accession: str) -> int | None:
     """Label a filing with the same fiscal year the financials use."""
     if period_end:
         row = conn.execute(
@@ -91,7 +117,7 @@ def fiscal_year_for_period(conn: psycopg.Connection, company_id: int, period_end
 
 
 def replace_filing(
-    conn: psycopg.Connection,
+    conn: DbConn,
     company_id: int,
     ref: FilingRef,
     fiscal_year: int | None,
@@ -100,26 +126,38 @@ def replace_filing(
     risk_factors: list[RiskFactor],
 ) -> int:
     conn.execute("DELETE FROM filing WHERE accession = %s", (ref.accession,))  # cascades
-    filing_id = conn.execute(
-        """
+    filing_id = one(
+        conn.execute(
+            """
         INSERT INTO filing (company_id, accession, form, filing_date, report_date, fiscal_year,
                             primary_document, url)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
         """,
-        (company_id, ref.accession, ref.form, ref.filing_date, ref.report_date, fiscal_year,
-         ref.primary_document, ref.url),
-    ).fetchone()["id"]
+            (
+                company_id,
+                ref.accession,
+                ref.form,
+                ref.filing_date,
+                ref.report_date,
+                fiscal_year,
+                ref.primary_document,
+                ref.url,
+            ),
+        )
+    )["id"]
 
     with conn.cursor() as cur:
         for item, sec in sections.items():
             text = sec.text
-            section_id = cur.execute(
-                """
+            section_id = one(
+                cur.execute(
+                    """
                 INSERT INTO filing_section (filing_id, item, title, text, char_count, extraction_method)
                 VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
                 """,
-                (filing_id, item, sec.title, text, len(text), sec.method),
-            ).fetchone()["id"]
+                    (filing_id, item, sec.title, text, len(text), sec.method),
+                )
+            )["id"]
             cur.executemany(
                 "INSERT INTO filing_chunk (section_id, seq, heading, text) VALUES (%s, %s, %s, %s)",
                 [(section_id, c.seq, c.heading, c.text) for c in chunks.get(item, [])],
@@ -131,7 +169,7 @@ def replace_filing(
     return filing_id
 
 
-def prune_filings(conn: psycopg.Connection, company_id: int, form: str, keep: list[str]) -> int:
+def prune_filings(conn: DbConn, company_id: int, form: str, keep: list[str]) -> int:
     cur = conn.execute(
         "DELETE FROM filing WHERE company_id = %s AND form = %s AND NOT (accession = ANY(%s))",
         (company_id, form, keep),
@@ -139,7 +177,7 @@ def prune_filings(conn: psycopg.Connection, company_id: int, form: str, keep: li
     return cur.rowcount
 
 
-def upsert_prices(conn: psycopg.Connection, company_id: int, history: PriceHistory) -> int:
+def upsert_prices(conn: DbConn, company_id: int, history: PriceHistory) -> int:
     with conn.cursor() as cur:
         cur.executemany(
             """
@@ -150,8 +188,17 @@ def upsert_prices(conn: psycopg.Connection, company_id: int, history: PriceHisto
                 adj_close = EXCLUDED.adj_close, volume = EXCLUDED.volume, source = EXCLUDED.source
             """,
             [
-                (company_id, b.date, _r(b.open), _r(b.high), _r(b.low), _r(b.close), _r(b.adj_close),
-                 b.volume, history.source)
+                (
+                    company_id,
+                    b.date,
+                    _r(b.open),
+                    _r(b.high),
+                    _r(b.low),
+                    _r(b.close),
+                    _r(b.adj_close),
+                    b.volume,
+                    history.source,
+                )
                 for b in history.bars
             ],
         )
@@ -165,7 +212,7 @@ def upsert_prices(conn: psycopg.Connection, company_id: int, history: PriceHisto
     return len(history.bars)
 
 
-def known_insider_accessions(conn: psycopg.Connection, company_id: int) -> set[str]:
+def known_insider_accessions(conn: DbConn, company_id: int) -> set[str]:
     rows = conn.execute(
         "SELECT DISTINCT accession FROM insider_transaction WHERE company_id = %s", (company_id,)
     ).fetchall()
@@ -173,7 +220,7 @@ def known_insider_accessions(conn: psycopg.Connection, company_id: int) -> set[s
 
 
 def insert_insider_transactions(
-    conn: psycopg.Connection, company_id: int, accession: str, filing_date: date, txs: list[InsiderTx]
+    conn: DbConn, company_id: int, accession: str, filing_date: date, txs: list[InsiderTx]
 ) -> int:
     with conn.cursor() as cur:
         cur.executemany(
@@ -185,24 +232,37 @@ def insert_insider_transactions(
             ON CONFLICT (accession, line_no) DO NOTHING
             """,
             [
-                (company_id, accession, t.line_no, filing_date, t.insider_name, t.insider_cik,
-                 t.relationship, t.transaction_date, t.security_title, t.code, t.acquired_disposed,
-                 t.shares, t.price, t.shares_owned_after, t.is_10b5_1, t.ownership)
+                (
+                    company_id,
+                    accession,
+                    t.line_no,
+                    filing_date,
+                    t.insider_name,
+                    t.insider_cik,
+                    t.relationship,
+                    t.transaction_date,
+                    t.security_title,
+                    t.code,
+                    t.acquired_disposed,
+                    t.shares,
+                    t.price,
+                    t.shares_owned_after,
+                    t.is_10b5_1,
+                    t.ownership,
+                )
                 for t in txs
             ],
         )
     return len(txs)
 
 
-def start_run(conn: psycopg.Connection, source: str, ticker: str) -> int:
-    row = conn.execute(
-        "INSERT INTO ingestion_run (source, ticker) VALUES (%s, %s) RETURNING id", (source, ticker)
-    ).fetchone()
+def start_run(conn: DbConn, source: str, ticker: str) -> int:
+    row = one(conn.execute("INSERT INTO ingestion_run (source, ticker) VALUES (%s, %s) RETURNING id", (source, ticker)))
     conn.commit()
     return row["id"]
 
 
-def finish_run(conn: psycopg.Connection, run_id: int, status: str, rows: int | None, detail: str | None) -> None:
+def finish_run(conn: DbConn, run_id: int, status: str, rows: int | None, detail: str | None) -> None:
     conn.execute(
         "UPDATE ingestion_run SET finished_at = now(), status = %s, rows_written = %s, detail = %s WHERE id = %s",
         (status, rows, detail, run_id),

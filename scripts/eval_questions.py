@@ -50,8 +50,12 @@ def main() -> None:
     only = {int(x) for x in args.only.split(",")} if args.only else None
 
     agent = Agent(OpenAICompatibleChat())
-    md = ["# /ask evaluation run", "", f"Models configured: `{', '.join(agent.llm.models)}` "
-          "(each answer records the model that produced it)", ""]
+    md = [
+        "# /ask evaluation run",
+        "",
+        f"Models configured: `{', '.join(agent.llm.models)}` (each answer records the model that produced it)",
+        "",
+    ]
     failures = 0
     with connect() as conn:
         for i, (q, expected) in enumerate(QUESTIONS, start=1):
@@ -66,18 +70,26 @@ def main() -> None:
             ok = route_ok and decline_ok and grounded is not False
             failures += not ok
             tools = ", ".join(f"{t.name}{'' if t.ok else '(err)'}" for t in r.tool_calls) or "-"
-            print(f"[{'PASS' if ok else 'FAIL'}] {i}. {q}\n    route={r.route.route} tickers={r.route.tickers} "
-                  f"tools=[{tools}] grounded={grounded} {r.latency_ms} ms")
+            print(
+                f"[{'PASS' if ok else 'FAIL'}] {i}. {q}\n    route={r.route.route} tickers={r.route.tickers} "
+                f"tools=[{tools}] grounded={grounded} {r.latency_ms} ms"
+            )
             if r.grounding and not r.grounding.grounded:
-                print(f"    unverified={r.grounding.unverified_numbers} unknown_citations={r.grounding.unknown_citations}")
+                print(
+                    f"    unverified={r.grounding.unverified_numbers} unknown_citations={r.grounding.unknown_citations}"
+                )
             md += [
-                f"## {i}. {q}", "",
+                f"## {i}. {q}",
+                "",
                 f"- **Route:** `{r.route.route}` {r.route.tickers} - {r.route.rationale}",
                 f"- **Tools:** {tools}",
                 f"- **Grounding:** {r.grounding.model_dump() if r.grounding else 'n/a (declined)'}",
-                f"- **Model:** `{r.model}` · **Latency:** {r.latency_ms} ms", "",
-                "\n".join("> " + line if line else ">" for line in r.answer.splitlines()), "",
-                "**Citations**", "",
+                f"- **Model:** `{r.model}` · **Latency:** {r.latency_ms} ms",
+                "",
+                "\n".join("> " + line if line else ">" for line in r.answer.splitlines()),
+                "",
+                "**Citations**",
+                "",
                 *[f"- `{c.id}` {c.description}" + (f" ([link]({c.url}))" if c.url else "") for c in r.citations],
                 "",
             ]

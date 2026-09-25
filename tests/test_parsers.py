@@ -48,7 +48,9 @@ def test_chunks_carry_heading_paths():
     chunks = chunk_section(sections()["7"])
     assert chunks[0].heading == "RESULTS OF OPERATIONS"
     risk_chunks = chunk_section(sections()["1A"])
-    assert any(c.heading and c.heading.startswith("Risks Related to Our Industry > Competition could") for c in risk_chunks)
+    assert any(
+        c.heading and c.heading.startswith("Risks Related to Our Industry > Competition could") for c in risk_chunks
+    )
 
 
 def test_form4_parsing_and_10b5_1_detection():

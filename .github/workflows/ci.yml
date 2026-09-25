@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  checks:
+    name: lint, types, tests (Postgres 16 + committed snapshot)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: fundamentals
+          POSTGRES_USER: tracker
+          POSTGRES_PASSWORD: tracker
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U tracker -d fundamentals"
+          --health-interval 3s --health-timeout 3s --health-retries 30
+    env:
+      DATABASE_URL: postgresql://tracker:tracker@localhost:5432/fundamentals
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Load schema and snapshot (same files docker-entrypoint-initdb.d runs)
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -f db/init/01_schema.sql
+          gunzip -c db/init/02_seed.sql.gz | psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q > /dev/null
+      - run: ruff check . && ruff format --check .
+      - run: mypy app
+      - run: pytest
+
+  compose:
+    name: docker compose up (the reviewer path)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bring up the stack and wait for health checks
+        run: docker compose up -d --build --wait
+      - name: Smoke test
+        run: |
+          curl -fsS localhost:8000/health
+          curl -fsS localhost:8000/companies/AAPL/valuation \
+            | python3 -c "import json,sys; v=json.load(sys.stdin); assert v['trailing_pe'] > 0; print('AAPL P/E', v['trailing_pe'])"
+      - name: Test suite inside the api container
+        run: docker compose run --rm --entrypoint pytest api
+      - if: failure()
+        run: docker compose logs

@@ -6,8 +6,7 @@ import re
 from difflib import SequenceMatcher
 from typing import Literal
 
-import psycopg
-
+from app.db.connection import DbConn, one
 from app.models import (
     BadRequest,
     FilingInfo,
@@ -21,8 +20,15 @@ from app.models import (
 from app.services.companies import get_company
 
 SECTION_ALIASES = {
-    "1a": "1A", "risk": "1A", "risk_factors": "1A", "risks": "1A",
-    "7": "7", "mdna": "7", "md&a": "7", "mda": "7", "management_discussion": "7",
+    "1a": "1A",
+    "risk": "1A",
+    "risk_factors": "1A",
+    "risks": "1A",
+    "7": "7",
+    "mdna": "7",
+    "md&a": "7",
+    "mda": "7",
+    "management_discussion": "7",
 }
 Which = Literal["latest", "prior", "all"]
 
@@ -36,7 +42,7 @@ def normalize_section(section: str | None) -> str | None:
     return SECTION_ALIASES[key]
 
 
-def _tenks(conn: psycopg.Connection, company_id: int) -> list[dict]:
+def _tenks(conn: DbConn, company_id: int) -> list[dict]:
     return conn.execute(
         """
         SELECT id, accession, form, fiscal_year, filing_date, report_date, url
@@ -46,7 +52,7 @@ def _tenks(conn: psycopg.Connection, company_id: int) -> list[dict]:
     ).fetchall()
 
 
-def list_filings(conn: psycopg.Connection, ticker: str) -> list[FilingInfo]:
+def list_filings(conn: DbConn, ticker: str) -> list[FilingInfo]:
     company = get_company(conn, ticker)
     out = []
     for f in _tenks(conn, company["id"]):
@@ -58,12 +64,17 @@ def list_filings(conn: psycopg.Connection, ticker: str) -> list[FilingInfo]:
             """,
             (f["id"],),
         ).fetchall()
-        n_risks = conn.execute("SELECT count(*) AS n FROM risk_factor WHERE filing_id = %s", (f["id"],)).fetchone()
+        n_risks = one(conn.execute("SELECT count(*) AS n FROM risk_factor WHERE filing_id = %s", (f["id"],)))
         out.append(
             FilingInfo(
-                accession=f["accession"], form=f["form"], fiscal_year=f["fiscal_year"],
-                filing_date=f["filing_date"], report_date=f["report_date"], url=f["url"],
-                sections=[FilingSectionInfo(**s) for s in sections], risk_factors=n_risks["n"],
+                accession=f["accession"],
+                form=f["form"],
+                fiscal_year=f["fiscal_year"],
+                filing_date=f["filing_date"],
+                report_date=f["report_date"],
+                url=f["url"],
+                sections=[FilingSectionInfo(**s) for s in sections],
+                risk_factors=n_risks["n"],
             )
         )
     return out
@@ -80,7 +91,7 @@ def to_or_tsquery(query: str) -> str | None:
 
 
 def search_filings(
-    conn: psycopg.Connection,
+    conn: DbConn,
     ticker: str,
     query: str,
     section: str | None = None,
@@ -167,15 +178,24 @@ def compare_risk_factors(
         if head >= UNCHANGED and body >= BODY_REVISED:
             unchanged += 1
         elif score >= MODIFIED:
-            modified.append(RiskFactorItem(
-                heading=rf["heading"], category=rf["category"], excerpt=rf["body"][:excerpt_chars],
-                matched_prior_heading=match["heading"] if match else None, similarity=round(score, 2),
-            ))
+            modified.append(
+                RiskFactorItem(
+                    heading=rf["heading"],
+                    category=rf["category"],
+                    excerpt=rf["body"][:excerpt_chars],
+                    matched_prior_heading=match["heading"] if match else None,
+                    similarity=round(score, 2),
+                )
+            )
         else:
-            new.append(RiskFactorItem(
-                heading=rf["heading"], category=rf["category"], excerpt=rf["body"][:excerpt_chars],
-                similarity=round(score, 2),
-            ))
+            new.append(
+                RiskFactorItem(
+                    heading=rf["heading"],
+                    category=rf["category"],
+                    excerpt=rf["body"][:excerpt_chars],
+                    similarity=round(score, 2),
+                )
+            )
     removed = [
         RiskFactorItem(heading=rf["heading"], category=rf["category"], similarity=round(score, 2))
         for rf in old
@@ -184,7 +204,7 @@ def compare_risk_factors(
     return new, modified, removed, unchanged
 
 
-def diff_risk_factors(conn: psycopg.Connection, ticker: str, excerpt_chars: int = 600) -> RiskFactorDiff:
+def diff_risk_factors(conn: DbConn, ticker: str, excerpt_chars: int = 600) -> RiskFactorDiff:
     """Deterministic diff of Item 1A risk factors between the two latest 10-Ks."""
     company = get_company(conn, ticker)
     filings = _tenks(conn, company["id"])
@@ -204,15 +224,26 @@ def diff_risk_factors(conn: psycopg.Connection, ticker: str, excerpt_chars: int 
     new, modified, removed, unchanged = compare_risk_factors(cur, old, excerpt_chars)
 
     def ref(f: dict) -> FilingRefOut:
-        return FilingRefOut(accession=f["accession"], fiscal_year=f["fiscal_year"], period_end=f["report_date"],
-                            filing_date=f["filing_date"], url=f["url"])
+        return FilingRefOut(
+            accession=f["accession"],
+            fiscal_year=f["fiscal_year"],
+            period_end=f["report_date"],
+            filing_date=f["filing_date"],
+            url=f["url"],
+        )
 
     return RiskFactorDiff(
         ticker=company["ticker"],
         latest=ref(latest),
         prior=ref(prior),
-        counts={"latest": len(cur), "prior": len(old), "new": len(new), "modified": len(modified),
-                "removed": len(removed), "unchanged": unchanged},
+        counts={
+            "latest": len(cur),
+            "prior": len(old),
+            "new": len(new),
+            "modified": len(modified),
+            "removed": len(removed),
+            "unchanged": unchanged,
+        },
         new=new,
         modified=modified,
         removed=removed,

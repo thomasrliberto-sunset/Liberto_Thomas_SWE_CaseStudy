@@ -15,7 +15,7 @@ COPY config ./config
 COPY db ./db
 COPY scripts ./scripts
 COPY tests ./tests
-COPY pytest.ini ./
+COPY pyproject.toml ./
 
 RUN useradd --create-home appuser
 USER appuser

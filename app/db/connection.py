@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
@@ -18,10 +19,22 @@ from app.config import ROOT, get_settings
 
 SCHEMA_PATH = ROOT / "db" / "init" / "01_schema.sql"
 
-_pool: ConnectionPool | None = None
+Row = dict[str, Any]
+DbConn = psycopg.Connection[Row]  # every connection uses dict rows
 
 
-def get_pool() -> ConnectionPool:
+def one(cursor: psycopg.Cursor[Row]) -> Row:
+    """First row of a query that must return one (INSERT ... RETURNING, aggregates)."""
+    row = cursor.fetchone()
+    if row is None:
+        raise LookupError("query returned no rows")
+    return row
+
+
+_pool: ConnectionPool[DbConn] | None = None
+
+
+def get_pool() -> ConnectionPool[DbConn]:
     global _pool
     if _pool is None:
         _pool = ConnectionPool(
@@ -44,17 +57,17 @@ def close_pool() -> None:
 
 
 @contextmanager
-def connection() -> Iterator[psycopg.Connection]:
+def connection() -> Iterator[DbConn]:
     """A pooled connection; commits on success, rolls back on error."""
     with get_pool().connection() as conn:
         yield conn
 
 
-def connect() -> psycopg.Connection:
+def connect() -> DbConn:
     """A standalone connection (used by the ingest CLI)."""
     return psycopg.connect(get_settings().database_url, row_factory=dict_row, prepare_threshold=None)
 
 
-def apply_schema(conn: psycopg.Connection, path: Path = SCHEMA_PATH) -> None:
+def apply_schema(conn: DbConn, path: Path = SCHEMA_PATH) -> None:
     conn.execute(path.read_text())
     conn.commit()

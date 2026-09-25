@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import psycopg
-
+from app.db.connection import DbConn
 from app.models import CompanySummary, IngestionRun, NotFound
 
 
-def get_company(conn: psycopg.Connection, ticker: str) -> dict:
+def get_company(conn: DbConn, ticker: str) -> dict:
     row = conn.execute(
         "SELECT id, ticker, cik, name, fiscal_year_end FROM company WHERE ticker = %s", (ticker.upper(),)
     ).fetchone()
@@ -15,7 +14,7 @@ def get_company(conn: psycopg.Connection, ticker: str) -> dict:
     return row
 
 
-def list_companies(conn: psycopg.Connection) -> list[CompanySummary]:
+def list_companies(conn: DbConn) -> list[CompanySummary]:
     rows = conn.execute(
         """
         SELECT c.ticker, c.name, c.cik, c.fiscal_year_end,
@@ -43,8 +42,6 @@ def list_companies(conn: psycopg.Connection) -> list[CompanySummary]:
     ]
 
 
-def list_ingestion_runs(conn: psycopg.Connection, limit: int = 50) -> list[IngestionRun]:
-    rows = conn.execute(
-        "SELECT * FROM ingestion_run ORDER BY id DESC LIMIT %s", (min(max(limit, 1), 500),)
-    ).fetchall()
+def list_ingestion_runs(conn: DbConn, limit: int = 50) -> list[IngestionRun]:
+    rows = conn.execute("SELECT * FROM ingestion_run ORDER BY id DESC LIMIT %s", (min(max(limit, 1), 500),)).fetchall()
     return [IngestionRun(**r) for r in rows]

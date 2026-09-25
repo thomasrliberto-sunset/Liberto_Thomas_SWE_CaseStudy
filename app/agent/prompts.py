@@ -58,7 +58,7 @@ ROUTE_HINTS = {
     "numbers": "Answer from the structured-data tools.",
     "narrative": "Answer from the filing-text tools; quote or closely paraphrase the filing.",
     "both": "Get the figures from the structured-data tools (get_financials etc.) AND the explanation from "
-            "search_filings; combine them.",
+    "search_filings; combine them.",
 }
 
 

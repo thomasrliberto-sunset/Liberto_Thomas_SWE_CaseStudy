@@ -1,0 +1,28 @@
+[project]
+name = "fundamentals-tracker"
+version = "1.0.0"
+description = "SEC XBRL + 10-K narrative + market data fundamentals service with a routed, tool-using LLM Q&A layer"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q -p no:cacheprovider"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "RUF001",  # typographic characters (’ – −) in strings are intentional: they occur in filing text
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501", "RUF012"]
+
+[tool.mypy]
+python_version = "3.10"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+check_untyped_defs = true

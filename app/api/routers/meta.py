@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import psycopg
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 
-from app.api.deps import csv_list, get_conn
+from app.api.deps import Conn, csv_list
 from app.config import get_settings, load_metrics
 from app.models import Comparison, IngestionRun
 from app.services import companies, fundamentals
@@ -12,7 +11,7 @@ router = APIRouter(tags=["meta"])
 
 
 @router.get("/health")
-def health(conn: psycopg.Connection = Depends(get_conn)):
+def health(conn: Conn):
     conn.execute("SELECT 1")
     s = get_settings()
     return {
@@ -29,23 +28,26 @@ def health(conn: psycopg.Connection = Depends(get_conn)):
 def metric_catalog():
     cat = load_metrics()
     return {
-        "reported": {k: {"label": m.label, "unit": m.unit, "concepts": m.concepts, "fallback": m.fallback}
-                     for k, m in cat.reported.items()},
-        "derived": {k: {"label": d.label, "formula": f"{d.numerator} / {d.denominator}"}
-                    for k, d in cat.derived.items()},
+        "reported": {
+            k: {"label": m.label, "unit": m.unit, "concepts": m.concepts, "fallback": m.fallback}
+            for k, m in cat.reported.items()
+        },
+        "derived": {
+            k: {"label": d.label, "formula": f"{d.numerator} / {d.denominator}"} for k, d in cat.derived.items()
+        },
     }
 
 
 @router.get("/compare/{metric}", response_model=Comparison, summary="Rank companies on one metric")
 def compare(
     metric: str,
+    conn: Conn,
     fiscal_year: int | None = Query(None, description="Default: each company's latest fiscal year"),
     tickers: str | None = Query(None, description="Comma-separated subset; default all"),
-    conn: psycopg.Connection = Depends(get_conn),
 ):
     return fundamentals.compare_metric(conn, metric, fiscal_year, csv_list(tickers, upper=True))
 
 
 @router.get("/ingestion/runs", response_model=list[IngestionRun], summary="Pipeline provenance")
-def ingestion_runs(limit: int = 50, conn: psycopg.Connection = Depends(get_conn)):
+def ingestion_runs(conn: Conn, limit: int = 50):
     return companies.list_ingestion_runs(conn, limit)

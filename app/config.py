@@ -76,9 +76,7 @@ class Universe:
 
 def load_universe(path: Path | None = None) -> Universe:
     raw = yaml.safe_load((path or get_settings().universe_path).read_text())
-    companies = tuple(
-        CompanyConfig(ticker=c["ticker"].upper(), cik=c.get("cik")) for c in raw["companies"]
-    )
+    companies = tuple(CompanyConfig(ticker=c["ticker"].upper(), cik=c.get("cik")) for c in raw["companies"])
     ing = raw.get("ingest", {}) or {}
     ingest = IngestConfig(
         tenk_filings=ing.get("tenk_filings", 2),

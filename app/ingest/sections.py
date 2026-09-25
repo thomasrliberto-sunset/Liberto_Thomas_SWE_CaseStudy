@@ -17,8 +17,26 @@ from dataclasses import dataclass, field
 from bs4 import BeautifulSoup, NavigableString, Tag, XMLParsedAsHTMLWarning
 
 BLOCK_TAGS = {
-    "p", "div", "li", "ul", "ol", "table", "tbody", "thead", "section", "article",
-    "h1", "h2", "h3", "h4", "h5", "h6", "center", "blockquote", "body", "html",
+    "p",
+    "div",
+    "li",
+    "ul",
+    "ol",
+    "table",
+    "tbody",
+    "thead",
+    "section",
+    "article",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "center",
+    "blockquote",
+    "body",
+    "html",
 }
 SKIP_TAGS = {"script", "style", "head", "title", "ix:header"}
 
@@ -86,7 +104,7 @@ def html_to_lines(html: str) -> list[Line]:
 
 
 def _style_flags(tag: Tag, bold: bool, italic: bool, underline: bool) -> tuple[bool, bool, bool]:
-    style = tag.get("style", "") or ""
+    style = str(tag.get("style") or "")
     if tag.name in ("b", "strong") or _BOLD.search(style):
         bold = True
     elif _NOT_BOLD.search(style):
@@ -109,7 +127,7 @@ def _walk(node: Tag, bold: bool, italic: bool, underline: bool, buf: _Buf, out: 
         if not isinstance(child, Tag):
             continue
         name = child.name.lower()
-        if name in SKIP_TAGS or _HIDDEN.search(child.get("style", "") or ""):
+        if name in SKIP_TAGS or _HIDDEN.search(str(child.get("style") or "")):
             continue
         b, i, u = _style_flags(child, bold, italic, underline)
         if name == "br":
@@ -149,14 +167,14 @@ _FOOTER = re.compile(r"form 10-k\s*\|?\s*\d{1,3}$", re.I)  # "Apple Inc. | 2024 
 
 def _drop_page_furniture(lines: list[Line]) -> list[Line]:
     """Remove page numbers and running headers/footers that repeat on every page."""
-    counts = Counter(l.text for l in lines if len(l.text) < 90)
+    counts = Counter(ln.text for ln in lines if len(ln.text) < 90)
     repeated = {t for t, n in counts.items() if n >= 8}
     return [
-        l
-        for l in lines
-        if not _PAGE_NUM.match(l.text)
-        and l.text not in repeated
-        and not (len(l.text) < 90 and _FOOTER.search(l.text))
+        ln
+        for ln in lines
+        if not _PAGE_NUM.match(ln.text)
+        and ln.text not in repeated
+        and not (len(ln.text) < 90 and _FOOTER.search(ln.text))
     ]
 
 
@@ -174,7 +192,7 @@ class Section:
 
     @property
     def text(self) -> str:
-        return "\n".join(l.text for l in self.lines)
+        return "\n".join(ln.text for ln in self.lines)
 
 
 def _item_headers(lines: list[Line]) -> list[tuple[int, str, str]]:
@@ -201,7 +219,7 @@ def find_section(lines: list[Line], item: str) -> Section | None:
         if code != item:
             continue
         end = next((h[0] for h in headers[pos + 1 :] if h[1] != item), len(lines))
-        size = sum(len(l.text) for l in lines[idx + 1 : end])
+        size = sum(len(ln.text) for ln in lines[idx + 1 : end])
         if best is None or size > best[0]:
             best = (size, idx, end, rest)
     if best is None:
@@ -249,7 +267,7 @@ def find_titled_section(lines: list[Line], item: str) -> Section | None:
             ),
             len(lines),
         )
-        size = sum(len(l.text) for l in lines[idx + 1 : end])
+        size = sum(len(ln.text) for ln in lines[idx + 1 : end])
         if best is None or size > best[0]:
             best = (size, idx, end)
     if best is None:
@@ -308,7 +326,7 @@ def classify_line(line: Line) -> tuple[str, str | None, str]:
         return "subheading", t, ""
     lead = line.lead
     if lead and len(lead) >= 40 and lead.endswith(_SENTENCE_END) and t.startswith(lead):
-        return "risk", lead, t[len(lead):].strip()
+        return "risk", lead, t[len(lead) :].strip()
     return "text", None, t
 
 

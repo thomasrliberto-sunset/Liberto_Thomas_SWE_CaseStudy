@@ -8,10 +8,10 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import date, timedelta
-
-import psycopg
+from functools import partial
 
 from app.config import MetricCatalog, Universe
+from app.db.connection import DbConn
 from app.ingest import edgar, store
 from app.ingest.http import SecClient
 from app.ingest.insiders import parse_form4, raw_xml_document
@@ -27,7 +27,7 @@ SOURCES = ("xbrl", "filings", "prices", "insiders")
 class Pipeline:
     def __init__(
         self,
-        conn: psycopg.Connection,
+        conn: DbConn,
         client: SecClient,
         universe: Universe,
         catalog: MetricCatalog,
@@ -61,10 +61,10 @@ class Pipeline:
             log.info("%s -> CIK %d (%s)", ticker, cik, info.name)
 
             steps: dict[str, Callable[[], tuple[int, str | None]]] = {
-                "xbrl": lambda: self._xbrl(company_id, cik),
-                "filings": lambda: self._filings(company_id, cik, submissions),
-                "prices": lambda: self._prices(company_id, ticker),
-                "insiders": lambda: self._insiders(company_id, cik, submissions),
+                "xbrl": partial(self._xbrl, company_id, cik),
+                "filings": partial(self._filings, company_id, cik, submissions),
+                "prices": partial(self._prices, company_id, ticker),
+                "insiders": partial(self._insiders, company_id, cik, submissions),
             }
             summary[ticker] = {s: self._run_step(s, ticker, steps[s]) for s in sources}
         return summary

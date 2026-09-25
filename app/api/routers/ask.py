@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-import psycopg
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 
 from app.agent.agent import Agent
 from app.agent.llm import LLMError, LLMNotConfigured, OpenAICompatibleChat
-from app.api.deps import get_conn
+from app.api.deps import Conn
 from app.config import get_settings
 from app.models import AskRequest, AskResponse
 
@@ -20,7 +19,7 @@ def get_agent() -> Agent:
 
 
 @router.post("/ask", response_model=AskResponse, summary="Natural-language Q&A over numbers and filings")
-def ask(req: AskRequest, conn: psycopg.Connection = Depends(get_conn)):
+def ask(req: AskRequest, conn: Conn):
     try:
         agent = get_agent()
     except LLMNotConfigured as exc:

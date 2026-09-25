@@ -16,19 +16,25 @@ def companyfacts(concepts: dict) -> dict:
 
 # NVIDIA-style fiscal years ending in late January. The FY2025 10-K also reports FY2024
 # as a comparative, tagged fy=2025 - the classic trap.
-NVDA_LIKE = companyfacts({
-    "Revenues": {"USD": [
-        fact("2023-01-30", "2024-01-28", 60_922, 2024, "A-24", "2024-02-21"),
-        fact("2024-01-29", "2025-01-26", 130_497, 2025, "A-25", "2025-02-26"),
-        fact("2023-01-30", "2024-01-28", 60_922, 2025, "A-25", "2025-02-26"),  # comparative
-        fact("2024-10-28", "2025-01-26", 39_331, 2025, "A-25", "2025-02-26", fp="Q4"),  # quarter: excluded
-    ]},
-    "EarningsPerShareDiluted": {"USD/shares": [
-        fact("2023-01-30", "2024-01-28", 11.93, 2024, "A-24", "2024-02-21"),  # pre-split
-        fact("2023-01-30", "2024-01-28", 1.19, 2025, "A-25", "2025-02-26"),  # restated post-split
-        fact("2024-01-29", "2025-01-26", 2.94, 2025, "A-25", "2025-02-26"),
-    ]},
-})
+NVDA_LIKE = companyfacts(
+    {
+        "Revenues": {
+            "USD": [
+                fact("2023-01-30", "2024-01-28", 60_922, 2024, "A-24", "2024-02-21"),
+                fact("2024-01-29", "2025-01-26", 130_497, 2025, "A-25", "2025-02-26"),
+                fact("2023-01-30", "2024-01-28", 60_922, 2025, "A-25", "2025-02-26"),  # comparative
+                fact("2024-10-28", "2025-01-26", 39_331, 2025, "A-25", "2025-02-26", fp="Q4"),  # quarter: excluded
+            ]
+        },
+        "EarningsPerShareDiluted": {
+            "USD/shares": [
+                fact("2023-01-30", "2024-01-28", 11.93, 2024, "A-24", "2024-02-21"),  # pre-split
+                fact("2023-01-30", "2024-01-28", 1.19, 2025, "A-25", "2025-02-26"),  # restated post-split
+                fact("2024-01-29", "2025-01-26", 2.94, 2025, "A-25", "2025-02-26"),
+            ]
+        },
+    }
+)
 
 
 def by_key(values):
@@ -52,17 +58,23 @@ def test_annual_only_and_restated_value_wins():
 
 
 def test_concept_priority_is_decided_per_period_and_fallbacks_fill_gaps():
-    doc = companyfacts({
-        # tag drift: old periods use SalesRevenueNet, new ones the ASC 606 concept
-        "SalesRevenueNet": {"USD": [fact("2016-01-01", "2016-12-31", 90, 2016, "K16", "2017-02-01")]},
-        "RevenueFromContractWithCustomerExcludingAssessedTax": {"USD": [
-            fact("2017-01-01", "2017-12-31", 100, 2017, "K17", "2018-02-01"),
-        ]},
-        "CostOfRevenue": {"USD": [
-            fact("2016-01-01", "2016-12-31", 50, 2016, "K16", "2017-02-01"),
-            fact("2017-01-01", "2017-12-31", 55, 2017, "K17", "2018-02-01"),
-        ]},
-    })
+    doc = companyfacts(
+        {
+            # tag drift: old periods use SalesRevenueNet, new ones the ASC 606 concept
+            "SalesRevenueNet": {"USD": [fact("2016-01-01", "2016-12-31", 90, 2016, "K16", "2017-02-01")]},
+            "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                "USD": [
+                    fact("2017-01-01", "2017-12-31", 100, 2017, "K17", "2018-02-01"),
+                ]
+            },
+            "CostOfRevenue": {
+                "USD": [
+                    fact("2016-01-01", "2016-12-31", 50, 2016, "K16", "2017-02-01"),
+                    fact("2017-01-01", "2017-12-31", 55, 2017, "K17", "2018-02-01"),
+                ]
+            },
+        }
+    )
     vals = by_key(build_annual_financials(flatten_companyfacts(doc), load_metrics()))
     assert vals[("revenue", 2016)].source_concept == "us-gaap:SalesRevenueNet"
     assert vals[("revenue", 2017)].source_concept.endswith("RevenueFromContractWithCustomerExcludingAssessedTax")

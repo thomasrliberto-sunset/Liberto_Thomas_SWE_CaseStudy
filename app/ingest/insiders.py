@@ -81,9 +81,7 @@ def parse_form4(xml_text: str) -> list[InsiderTx]:
     relationship = _relationship(owners[0]) if owners else "Unknown"
 
     plan_footnotes = {
-        fn.get("id")
-        for fn in root.findall("footnotes/footnote")
-        if fn.text and re.search(r"10b5-1", fn.text, re.I)
+        fn.get("id") for fn in root.findall("footnotes/footnote") if fn.text and re.search(r"10b5-1", fn.text, re.I)
     }
     doc_level_plan = _flag(_text(root, "aff10b5One"))
 
@@ -106,9 +104,7 @@ def parse_form4(xml_text: str) -> list[InsiderTx]:
                 acquired_disposed=_text(tx, "transactionAmounts/transactionAcquiredDisposedCode/value"),
                 shares=_float(_text(tx, "transactionAmounts/transactionShares/value")),
                 price=_float(_text(tx, "transactionAmounts/transactionPricePerShare/value")),
-                shares_owned_after=_float(
-                    _text(tx, "postTransactionAmounts/sharesOwnedFollowingTransaction/value")
-                ),
+                shares_owned_after=_float(_text(tx, "postTransactionAmounts/sharesOwnedFollowingTransaction/value")),
                 is_10b5_1=doc_level_plan or bool(footnote_ids & plan_footnotes),
                 ownership=_text(tx, "ownershipNature/directOrIndirectOwnership/value"),
             )

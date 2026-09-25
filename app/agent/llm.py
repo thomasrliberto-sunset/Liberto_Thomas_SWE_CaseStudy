@@ -95,15 +95,21 @@ class OpenAICompatibleChat:
         except (KeyError, IndexError, TypeError) as exc:
             raise LLMError(f"unexpected LLM response shape: {str(data)[:300]}") from exc
 
-        calls = []
+        calls: list[ToolCall] = []
         for tc in message.get("tool_calls") or []:
             raw = tc.get("function", {}).get("arguments") or "{}"
             try:
                 args = json.loads(raw) if isinstance(raw, str) else dict(raw)
             except json.JSONDecodeError:
                 args = {"__invalid_json__": raw}
-            calls.append(ToolCall(id=tc.get("id") or f"call_{len(calls)}", name=tc["function"]["name"],
-                                  arguments=args, raw_arguments=raw if isinstance(raw, str) else json.dumps(raw)))
+            calls.append(
+                ToolCall(
+                    id=tc.get("id") or f"call_{len(calls)}",
+                    name=tc["function"]["name"],
+                    arguments=args,
+                    raw_arguments=raw if isinstance(raw, str) else json.dumps(raw),
+                )
+            )
         return ChatResult(
             content=message.get("content"),
             tool_calls=calls,

@@ -8,12 +8,11 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
-
-import psycopg
+from typing import Any, ClassVar
 
 from app.config import load_metrics
-from app.models import BadRequest, Citation, NotFound
+from app.db.connection import DbConn
+from app.models import BadRequest, Citation, CitationKind, NotFound
 from app.services import filings, fundamentals, insiders, market
 from app.services.metrics import fmt_money
 
@@ -32,16 +31,30 @@ class SourceLedger:
     evidence: list[Any] = field(default_factory=list)  # raw tool outputs, for number grounding
     _counters: dict[str, int] = field(default_factory=dict)
 
-    PREFIX = {"financials": "F", "comparison": "C", "valuation": "V", "prices": "P",
-              "filing_text": "S", "risk_diff": "R", "insiders": "I"}
+    PREFIX: ClassVar[dict[str, str]] = {
+        "financials": "F",
+        "comparison": "C",
+        "valuation": "V",
+        "prices": "P",
+        "filing_text": "S",
+        "risk_diff": "R",
+        "insiders": "I",
+    }
 
-    def add(self, kind: str, description: str, ticker: str | None = None, url: str | None = None,
-            excerpt: str | None = None) -> str:
+    def add(
+        self,
+        kind: CitationKind,
+        description: str,
+        ticker: str | None = None,
+        url: str | None = None,
+        excerpt: str | None = None,
+    ) -> str:
         prefix = self.PREFIX[kind]
         self._counters[prefix] = self._counters.get(prefix, 0) + 1
         cid = f"{prefix}{self._counters[prefix]}"
-        self.citations[cid] = Citation(id=cid, kind=kind, ticker=ticker, description=description, url=url,
-                                       excerpt=excerpt)
+        self.citations[cid] = Citation(
+            id=cid, kind=kind, ticker=ticker, description=description, url=url, excerpt=excerpt
+        )
         return cid
 
 
@@ -50,12 +63,14 @@ class ToolSpec:
     name: str
     description: str
     parameters: dict[str, Any]
-    handler: Callable[[psycopg.Connection, dict[str, Any], SourceLedger], Any]
+    handler: Callable[[DbConn, dict[str, Any], SourceLedger], Any]
     group: str  # "numbers" | "narrative"
 
     def schema(self) -> dict[str, Any]:
-        return {"type": "function", "function": {"name": self.name, "description": self.description,
-                                                 "parameters": self.parameters}}
+        return {
+            "type": "function",
+            "function": {"name": self.name, "description": self.description, "parameters": self.parameters},
+        }
 
 
 def _growth(v: float | None) -> str | None:
@@ -77,8 +92,9 @@ def _fmt_metric(mv) -> str:
 def _get_financials(conn, args, ledger: SourceLedger):
     out = []
     for ticker in args["tickers"]:
-        f = fundamentals.get_fundamentals(conn, ticker, args.get("metrics"), args.get("fiscal_years"),
-                                          args.get("last_n", 3))
+        f = fundamentals.get_fundamentals(
+            conn, ticker, args.get("metrics"), args.get("fiscal_years"), args.get("last_n", 3)
+        )
         ledger.evidence.append(f.model_dump(mode="json"))
         accessions = sorted({p.accession for p in f.periods if p.accession})
         sid = ledger.add(
@@ -90,17 +106,22 @@ def _get_financials(conn, args, ledger: SourceLedger):
             url=f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={f.ticker}&type=10-K",
         )
         derived = sorted({f"{m}: {mv.source}" for p in f.periods for m, mv in p.metrics.items() if mv.derived})
-        out.append({
-            "source_id": sid,
-            "ticker": f.ticker,
-            "company": f.name,
-            "rows": [
-                {"fiscal_year": p.fiscal_year, "period_end": p.period_end.isoformat(),
-                 **{m: _fmt_metric(mv) for m, mv in p.metrics.items()}}
-                for p in f.periods
-            ],
-            **({"derived_not_reported": derived} if derived else {}),
-        })
+        out.append(
+            {
+                "source_id": sid,
+                "ticker": f.ticker,
+                "company": f.name,
+                "rows": [
+                    {
+                        "fiscal_year": p.fiscal_year,
+                        "period_end": p.period_end.isoformat(),
+                        **{m: _fmt_metric(mv) for m, mv in p.metrics.items()},
+                    }
+                    for p in f.periods
+                ],
+                **({"derived_not_reported": derived} if derived else {}),
+            }
+        )
     return out
 
 
@@ -112,8 +133,16 @@ def _compare(conn, args, ledger: SourceLedger):
         "source_id": sid,
         "metric": c.label,
         "basis": c.basis,
-        "ranking": [{"rank": r.rank, "ticker": r.ticker, "fiscal_year": r.fiscal_year,
-                     "period_end": r.period_end.isoformat(), "value": r.display} for r in c.rows],
+        "ranking": [
+            {
+                "rank": r.rank,
+                "ticker": r.ticker,
+                "fiscal_year": r.fiscal_year,
+                "period_end": r.period_end.isoformat(),
+                "value": r.display,
+            }
+            for r in c.rows
+        ],
         "missing": c.missing,
         "alignment_note": c.alignment_note,
     }
@@ -130,20 +159,22 @@ def _valuation(conn, args, ledger: SourceLedger):
             "10-K (SEC XBRL)",
             ticker=v.ticker,
         )
-        out.append({
-            "source_id": sid,
-            "ticker": v.ticker,
-            "price": f"${v.price:,.2f} (close {v.price_date.isoformat()})",
-            "eps_diluted": f"${v.eps_diluted_adjusted:,.2f} (FY{v.eps_fiscal_year}, period ended "
-                           f"{v.eps_period_end.isoformat()})",
-            "trailing_pe": f"{v.trailing_pe:.1f}x" if v.trailing_pe else "not meaningful",
-            "price_to_sales": f"{v.price_to_sales:.1f}x" if v.price_to_sales else None,
-            "market_cap_approx": fmt_money(v.market_cap_approx),
-            "pe_at_fiscal_year_ends": [
-                {"fiscal_year": h.fiscal_year, "pe": f"{h.pe:.1f}x" if h.pe else None} for h in v.history
-            ],
-            "notes": v.notes,
-        })
+        out.append(
+            {
+                "source_id": sid,
+                "ticker": v.ticker,
+                "price": f"${v.price:,.2f} (close {v.price_date.isoformat()})",
+                "eps_diluted": f"${v.eps_diluted_adjusted:,.2f} (FY{v.eps_fiscal_year}, period ended "
+                f"{v.eps_period_end.isoformat()})",
+                "trailing_pe": f"{v.trailing_pe:.1f}x" if v.trailing_pe else "not meaningful",
+                "price_to_sales": f"{v.price_to_sales:.1f}x" if v.price_to_sales else None,
+                "market_cap_approx": fmt_money(v.market_cap_approx),
+                "pe_at_fiscal_year_ends": [
+                    {"fiscal_year": h.fiscal_year, "pe": f"{h.pe:.1f}x" if h.pe else None} for h in v.history
+                ],
+                "notes": v.notes,
+            }
+        )
     return out
 
 
@@ -152,10 +183,15 @@ def _prices(conn, args, ledger: SourceLedger):
     ledger.evidence.append(p.model_dump(mode="json"))
     sid = ledger.add("prices", f"{p.ticker} daily prices {p.start}..{p.end} ({p.source})", ticker=p.ticker)
     return {
-        "source_id": sid, "ticker": p.ticker, "start": str(p.start), "end": str(p.end),
-        "first_close": f"${p.first_close:,.2f}", "last_close": f"${p.last_close:,.2f}",
+        "source_id": sid,
+        "ticker": p.ticker,
+        "start": str(p.start),
+        "end": str(p.end),
+        "first_close": f"${p.first_close:,.2f}",
+        "last_close": f"${p.last_close:,.2f}",
         "change": f"{p.change_pct:+.1f}%" if p.change_pct is not None else None,
-        "high": f"${p.high:,.2f}", "low": f"${p.low:,.2f}",
+        "high": f"${p.high:,.2f}",
+        "low": f"${p.low:,.2f}",
     }
 
 
@@ -164,12 +200,16 @@ def _insiders(conn, args, ledger: SourceLedger):
     ledger.evidence.append(s.model_dump(mode="json"))
     sid = ledger.add("insiders", f"{s.ticker} SEC Form 4 filings {s.window_start}..{s.window_end}", ticker=s.ticker)
     return {
-        "source_id": sid, "ticker": s.ticker, "window": f"{s.window_start} to {s.window_end}",
+        "source_id": sid,
+        "ticker": s.ticker,
+        "window": f"{s.window_start} to {s.window_end}",
         "window_days": (s.window_end - s.window_start).days,
         "open_market_buys": f"{s.open_market_buys} ({fmt_money(s.open_market_buy_value)})",
         "open_market_sales": f"{s.open_market_sales} ({fmt_money(s.open_market_sale_value)})",
         "net_open_market": fmt_money(s.net_open_market_value),
-        "sales_under_10b5_1_plans": f"{s.sale_value_under_10b5_1_pct:.0f}%" if s.sale_value_under_10b5_1_pct is not None else None,
+        "sales_under_10b5_1_plans": f"{s.sale_value_under_10b5_1_pct:.0f}%"
+        if s.sale_value_under_10b5_1_pct is not None
+        else None,
         "top_sellers": [f"{t.insider} ({t.relationship}): {fmt_money(t.value)}" for t in s.top_sellers],
         "other_activity_by_code": s.other_activity,
         "notes": s.notes,
@@ -181,17 +221,30 @@ def _insiders(conn, args, ledger: SourceLedger):
 
 def _search(conn, args, ledger: SourceLedger):
     which = {"both": "all"}.get(args.get("filing", "latest"), args.get("filing", "latest"))
-    hits = filings.search_filings(conn, args["ticker"], args["query"], args.get("section"), which,
-                                  None, min(args.get("limit", 5), 8))
+    hits = filings.search_filings(
+        conn, args["ticker"], args["query"], args.get("section"), which, None, min(args.get("limit", 5), 8)
+    )
     ledger.evidence.append([h.model_dump(mode="json") for h in hits])
     out = []
     for h in hits:
         section = "Item 1A Risk Factors" if h.item == "1A" else "Item 7 MD&A"
-        sid = ledger.add("filing_text", f"{h.ticker} FY{h.fiscal_year} 10-K (filed {h.filing_date}), {section}"
-                         + (f" - {h.heading[:120]}" if h.heading else ""),
-                         ticker=h.ticker, url=h.url, excerpt=h.text[:400])
-        out.append({"source_id": sid, "fiscal_year": h.fiscal_year, "section": section,
-                    "heading": h.heading, "text": h.text[:1500]})
+        sid = ledger.add(
+            "filing_text",
+            f"{h.ticker} FY{h.fiscal_year} 10-K (filed {h.filing_date}), {section}"
+            + (f" - {h.heading[:120]}" if h.heading else ""),
+            ticker=h.ticker,
+            url=h.url,
+            excerpt=h.text[:400],
+        )
+        out.append(
+            {
+                "source_id": sid,
+                "fiscal_year": h.fiscal_year,
+                "section": section,
+                "heading": h.heading,
+                "text": h.text[:1500],
+            }
+        )
     return out or {"result": "no matching passages; try different keywords or section='any'"}
 
 
@@ -201,7 +254,8 @@ def _risk_diff(conn, args, ledger: SourceLedger):
     sid = ledger.add(
         "risk_diff",
         f"{d.ticker} Item 1A risk factors: FY{d.latest.fiscal_year} 10-K vs FY{d.prior.fiscal_year} 10-K",
-        ticker=d.ticker, url=d.latest.url,
+        ticker=d.ticker,
+        url=d.latest.url,
     )
     return {
         "source_id": sid,
@@ -209,7 +263,10 @@ def _risk_diff(conn, args, ledger: SourceLedger):
         "prior_10k": f"FY{d.prior.fiscal_year} (period ended {d.prior.period_end}, filed {d.prior.filing_date})",
         "counts": d.counts,
         "new_risk_factors": [{"heading": n.heading, "category": n.category, "excerpt": n.excerpt} for n in d.new],
-        "reworded_or_substantially_revised": [{"heading": m.heading, "previously": m.matched_prior_heading, "excerpt": (m.excerpt or "")[:300]} for m in d.modified],
+        "reworded_or_substantially_revised": [
+            {"heading": m.heading, "previously": m.matched_prior_heading, "excerpt": (m.excerpt or "")[:300]}
+            for m in d.modified
+        ],
         "removed": [r.heading for r in d.removed],
         "method": d.method,
     }
@@ -228,75 +285,116 @@ def build_tools(tickers: list[str]) -> dict[str, ToolSpec]:
             "get_financials",
             "Annual reported financials from SEC XBRL for one or more companies, with YoY growth and margins "
             "pre-computed. Use for revenue, profit, EPS, cash flow, margins and growth over fiscal years.",
-            {"type": "object", "properties": {
-                "tickers": ticker_list,
-                "metrics": {"type": "array", "items": {"type": "string", "enum": metric_enum},
-                            "description": "Default: revenue, profits, EPS, margins, FCF"},
-                "fiscal_years": {"type": "array", "items": {"type": "integer"},
-                                 "description": "Specific fiscal years (company's own labels)"},
-                "last_n": {"type": "integer", "minimum": 1, "maximum": 10,
-                           "description": "Most recent N fiscal years (default 3)"},
-            }, "required": ["tickers"]},
-            _get_financials, "numbers",
+            {
+                "type": "object",
+                "properties": {
+                    "tickers": ticker_list,
+                    "metrics": {
+                        "type": "array",
+                        "items": {"type": "string", "enum": metric_enum},
+                        "description": "Default: revenue, profits, EPS, margins, FCF",
+                    },
+                    "fiscal_years": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Specific fiscal years (company's own labels)",
+                    },
+                    "last_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Most recent N fiscal years (default 3)",
+                    },
+                },
+                "required": ["tickers"],
+            },
+            _get_financials,
+            "numbers",
         ),
         ToolSpec(
             "compare_companies",
             "Rank companies on one metric for their latest fiscal year (default) or a given fiscal year. "
             "Use for 'which company had the highest/lowest ...' questions.",
-            {"type": "object", "properties": {
-                "metric": {"type": "string", "enum": metric_enum},
-                "fiscal_year": {"type": "integer", "description": "Omit for each company's latest fiscal year"},
-                "tickers": {**ticker_list, "description": "Omit for all tracked companies"},
-            }, "required": ["metric"]},
-            _compare, "numbers",
+            {
+                "type": "object",
+                "properties": {
+                    "metric": {"type": "string", "enum": metric_enum},
+                    "fiscal_year": {"type": "integer", "description": "Omit for each company's latest fiscal year"},
+                    "tickers": {**ticker_list, "description": "Omit for all tracked companies"},
+                },
+                "required": ["metric"],
+            },
+            _compare,
+            "numbers",
         ),
         ToolSpec(
             "get_valuation",
             "Trailing P/E and P/S: latest stored closing price joined with the latest annual diluted EPS and "
             "revenue from the 10-K (split-adjusted), plus P/E at past fiscal year ends.",
             {"type": "object", "properties": {"tickers": ticker_list}, "required": ["tickers"]},
-            _valuation, "numbers",
+            _valuation,
+            "numbers",
         ),
         ToolSpec(
             "get_price_performance",
             "Stock price performance over a date range (first/last close, % change, high, low).",
-            {"type": "object", "properties": {
-                "ticker": one_ticker,
-                "start_date": {"type": "string", "format": "date", "description": "YYYY-MM-DD"},
-                "end_date": {"type": "string", "format": "date", "description": "YYYY-MM-DD"},
-            }, "required": ["ticker"]},
-            _prices, "numbers",
+            {
+                "type": "object",
+                "properties": {
+                    "ticker": one_ticker,
+                    "start_date": {"type": "string", "format": "date", "description": "YYYY-MM-DD"},
+                    "end_date": {"type": "string", "format": "date", "description": "YYYY-MM-DD"},
+                },
+                "required": ["ticker"],
+            },
+            _prices,
+            "numbers",
         ),
         ToolSpec(
             "get_insider_activity",
             "Insider open-market buying and selling from SEC Form 4 filings, incl. share of sales under "
             "Rule 10b5-1 plans and top sellers.",
-            {"type": "object", "properties": {
-                "ticker": one_ticker,
-                "days": {"type": "integer", "minimum": 7, "maximum": 730, "description": "Lookback (default 365)"},
-            }, "required": ["ticker"]},
-            _insiders, "numbers",
+            {
+                "type": "object",
+                "properties": {
+                    "ticker": one_ticker,
+                    "days": {"type": "integer", "minimum": 7, "maximum": 730, "description": "Lookback (default 365)"},
+                },
+                "required": ["ticker"],
+            },
+            _insiders,
+            "numbers",
         ),
         ToolSpec(
             "search_filings",
             "Full-text search over the company's 10-K narrative: Item 1A Risk Factors and Item 7 MD&A "
             "(management's discussion of results, drivers, outlook commentary, liquidity). Returns passages "
             "with source ids. Use specific keywords (e.g. 'revenue increased driven by Azure').",
-            {"type": "object", "properties": {
-                "ticker": one_ticker,
-                "query": {"type": "string", "description": "Keywords to search for"},
-                "section": {"type": "string", "enum": ["risk_factors", "mdna", "any"], "description": "Default any"},
-                "filing": {"type": "string", "enum": ["latest", "prior", "both"], "description": "Default latest"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 8},
-            }, "required": ["ticker", "query"]},
-            _search, "narrative",
+            {
+                "type": "object",
+                "properties": {
+                    "ticker": one_ticker,
+                    "query": {"type": "string", "description": "Keywords to search for"},
+                    "section": {
+                        "type": "string",
+                        "enum": ["risk_factors", "mdna", "any"],
+                        "description": "Default any",
+                    },
+                    "filing": {"type": "string", "enum": ["latest", "prior", "both"], "description": "Default latest"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 8},
+                },
+                "required": ["ticker", "query"],
+            },
+            _search,
+            "narrative",
         ),
         ToolSpec(
             "diff_risk_factors",
             "Compare Item 1A risk factors between the latest and prior 10-K: new, reworded/expanded, and "
             "removed risk factors (deterministic heading + text matching).",
             {"type": "object", "properties": {"ticker": one_ticker}, "required": ["ticker"]},
-            _risk_diff, "narrative",
+            _risk_diff,
+            "narrative",
         ),
     ]
     return {s.name: s for s in specs}
@@ -307,7 +405,7 @@ def tools_for_route(all_tools: dict[str, ToolSpec], route: str) -> dict[str, Too
     return {n: t for n, t in all_tools.items() if t.group in groups}
 
 
-def run_tool(spec: ToolSpec, conn: psycopg.Connection, args: dict[str, Any], ledger: SourceLedger) -> tuple[str, bool, str | None]:
+def run_tool(spec: ToolSpec, conn: DbConn, args: dict[str, Any], ledger: SourceLedger) -> tuple[str, bool, str | None]:
     """-> (content for the model, ok, error). Errors go back to the model so it can adapt."""
     if "__invalid_json__" in args:
         return json.dumps({"error": "arguments were not valid JSON"}), False, "invalid JSON arguments"
@@ -322,4 +420,3 @@ def run_tool(spec: ToolSpec, conn: psycopg.Connection, args: dict[str, Any], led
     if len(text) > MAX_RESULT_CHARS:
         text = text[:MAX_RESULT_CHARS] + '..."[truncated]'
     return text, True, None
-

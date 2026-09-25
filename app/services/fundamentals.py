@@ -7,17 +7,24 @@ reported values, so there's exactly one definition of each ratio.
 from __future__ import annotations
 
 from collections import defaultdict
-
-import psycopg
+from datetime import date
 
 from app.config import MetricCatalog, load_metrics
+from app.db.connection import DbConn
 from app.models import BadRequest, Comparison, ComparisonRow, FiscalPeriod, Fundamentals, MetricValue, NotFound
 from app.services.companies import get_company
 from app.services.metrics import consecutive_years, fmt_value, safe_ratio, yoy_growth
 
 DEFAULT_METRICS = [
-    "revenue", "gross_profit", "operating_income", "net_income", "eps_diluted",
-    "gross_margin", "operating_margin", "net_margin", "free_cash_flow",
+    "revenue",
+    "gross_profit",
+    "operating_income",
+    "net_income",
+    "eps_diluted",
+    "gross_margin",
+    "operating_margin",
+    "net_margin",
+    "free_cash_flow",
 ]
 
 
@@ -30,7 +37,7 @@ def _validate_metrics(metrics: list[str] | None, catalog: MetricCatalog) -> list
     return metrics
 
 
-def _load_rows(conn: psycopg.Connection, company_id: int) -> dict[int, dict[str, dict]]:
+def _load_rows(conn: DbConn, company_id: int) -> dict[int, dict[str, dict]]:
     rows = conn.execute(
         """
         SELECT metric, fiscal_year, period_start, period_end, value::float8 AS value, unit,
@@ -57,9 +64,7 @@ def _metric_value(
             return None
         p = prev.get(name)
         growth = (
-            yoy_growth(r["value"], p["value"])
-            if p and consecutive_years(p["period_end"], r["period_end"])
-            else None
+            yoy_growth(r["value"], p["value"]) if p and consecutive_years(p["period_end"], r["period_end"]) else None
         )
         return MetricValue(
             value=r["value"],
@@ -74,7 +79,7 @@ def _metric_value(
 
     def ratio(rows: dict[str, dict]) -> float | None:
         num, den = rows.get(d.numerator), rows.get(d.denominator)
-        return safe_ratio(num and num["value"], den and den["value"])
+        return safe_ratio(num["value"] if num else None, den["value"] if den else None)
 
     value = ratio(cur)
     if value is None:
@@ -95,7 +100,7 @@ def _metric_value(
 
 
 def get_fundamentals(
-    conn: psycopg.Connection,
+    conn: DbConn,
     ticker: str,
     metrics: list[str] | None = None,
     fiscal_years: list[int] | None = None,
@@ -136,7 +141,7 @@ def get_fundamentals(
 
 
 def compare_metric(
-    conn: psycopg.Connection,
+    conn: DbConn,
     metric: str,
     fiscal_year: int | None = None,
     tickers: list[str] | None = None,
@@ -157,29 +162,27 @@ def compare_metric(
     if not rows:
         raise NotFound("no matching companies")
 
-    results, missing = [], []
+    results: list[tuple[str, int, date, float, str | None]] = []
+    missing: list[str] = []
     for c in rows:
         by_year = _load_rows(conn, c["id"])
-        if fiscal_year is not None:
-            year = fiscal_year
-        else:
-            complete = [y for y in by_year if "revenue" in by_year[y]]
-            year = max(complete) if complete else None
+        complete = [y for y in by_year if "revenue" in by_year[y]]
+        year = fiscal_year if fiscal_year is not None else (max(complete) if complete else None)
         mv = _metric_value(metric, year, by_year, catalog) if year is not None else None
-        if mv is None or mv.value is None:
+        if year is None or mv is None or mv.value is None:
             missing.append(c["ticker"])
             continue
         anchor = by_year[year].get("revenue") or next(iter(by_year[year].values()))
-        results.append((c["ticker"], year, anchor["period_end"], mv))
+        results.append((c["ticker"], year, anchor["period_end"], mv.value, mv.display))
 
-    results.sort(key=lambda r: r[3].value, reverse=True)
+    results.sort(key=lambda r: r[3], reverse=True)
     ends = {r[2] for r in results}
     note = None
     if len(ends) > 1:
         spread = (max(ends) - min(ends)).days
         note = (
             f"Fiscal years are not calendar-aligned (period ends span {spread} days: "
-            + ", ".join(f"{t} FY{y} ended {e.isoformat()}" for t, y, e, _ in results)
+            + ", ".join(f"{t} FY{y} ended {e.isoformat()}" for t, y, e, _, _ in results)
             + ")."
         )
     return Comparison(
@@ -187,8 +190,8 @@ def compare_metric(
         label=catalog.label(metric),
         basis=f"fiscal year {fiscal_year}" if fiscal_year else "each company's latest reported fiscal year",
         rows=[
-            ComparisonRow(rank=i, ticker=t, fiscal_year=y, period_end=e, value=mv.value, display=mv.display)
-            for i, (t, y, e, mv) in enumerate(results, start=1)
+            ComparisonRow(rank=i, ticker=t, fiscal_year=y, period_end=e, value=v, display=disp)
+            for i, (t, y, e, v, disp) in enumerate(results, start=1)
         ],
         missing=missing,
         alignment_note=note,

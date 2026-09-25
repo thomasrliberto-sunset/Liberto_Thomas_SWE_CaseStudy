@@ -28,21 +28,92 @@ from app.db.connection import connect  # noqa: E402
 # FK-safe order; (table, columns, serial column or None)
 TABLES = [
     ("company", ["id", "ticker", "cik", "name", "fiscal_year_end", "sic_description", "updated_at"], "id"),
-    ("xbrl_fact", ["id", "company_id", "taxonomy", "concept", "unit", "period_start", "period_end", "value", "fy",
-                   "fp", "form", "accession", "filed", "frame"], "id"),
-    ("annual_financial", ["company_id", "metric", "fiscal_year", "period_start", "period_end", "value", "unit",
-                          "source_concept", "derivation", "accession", "filed"], None),
-    ("filing", ["id", "company_id", "accession", "form", "filing_date", "report_date", "fiscal_year",
-                "primary_document", "url", "fetched_at"], "id"),
+    (
+        "xbrl_fact",
+        [
+            "id",
+            "company_id",
+            "taxonomy",
+            "concept",
+            "unit",
+            "period_start",
+            "period_end",
+            "value",
+            "fy",
+            "fp",
+            "form",
+            "accession",
+            "filed",
+            "frame",
+        ],
+        "id",
+    ),
+    (
+        "annual_financial",
+        [
+            "company_id",
+            "metric",
+            "fiscal_year",
+            "period_start",
+            "period_end",
+            "value",
+            "unit",
+            "source_concept",
+            "derivation",
+            "accession",
+            "filed",
+        ],
+        None,
+    ),
+    (
+        "filing",
+        [
+            "id",
+            "company_id",
+            "accession",
+            "form",
+            "filing_date",
+            "report_date",
+            "fiscal_year",
+            "primary_document",
+            "url",
+            "fetched_at",
+        ],
+        "id",
+    ),
     ("filing_section", ["id", "filing_id", "item", "title", "text", "char_count", "extraction_method"], "id"),
     ("filing_chunk", ["id", "section_id", "seq", "heading", "text"], "id"),
     ("risk_factor", ["id", "filing_id", "seq", "category", "heading", "body"], "id"),
     ("price_daily", ["company_id", "date", "open", "high", "low", "close", "adj_close", "volume", "source"], None),
     ("stock_split", ["company_id", "date", "ratio"], None),
-    ("insider_transaction", ["id", "company_id", "accession", "line_no", "filing_date", "insider_name", "insider_cik",
-                             "relationship", "transaction_date", "security_title", "code", "acquired_disposed",
-                             "shares", "price", "shares_owned_after", "is_10b5_1", "ownership"], "id"),
-    ("ingestion_run", ["id", "source", "ticker", "started_at", "finished_at", "status", "rows_written", "detail"], "id"),
+    (
+        "insider_transaction",
+        [
+            "id",
+            "company_id",
+            "accession",
+            "line_no",
+            "filing_date",
+            "insider_name",
+            "insider_cik",
+            "relationship",
+            "transaction_date",
+            "security_title",
+            "code",
+            "acquired_disposed",
+            "shares",
+            "price",
+            "shares_owned_after",
+            "is_10b5_1",
+            "ownership",
+        ],
+        "id",
+    ),
+    (
+        "ingestion_run",
+        ["id", "source", "ticker", "started_at", "finished_at", "status", "rows_written", "detail"],
+        "id",
+    ),
 ]
 
 ORDER = {  # deterministic output for tables without a serial key
@@ -65,7 +136,7 @@ def copy_value(v) -> str:
     if isinstance(v, Decimal):
         return format(v, "f")
     s = str(v)
-    return (s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r"))
+    return s.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
 
 
 def main(out: Path = ROOT / "db" / "init" / "02_seed.sql.gz") -> None:
@@ -80,8 +151,10 @@ def main(out: Path = ROOT / "db" / "init" / "02_seed.sql.gz") -> None:
                 f.write("\t".join(copy_value(r[c]) for c in cols) + "\n")
             f.write("\\.\n")
             if serial:
-                f.write(f"SELECT setval(pg_get_serial_sequence('{table}', '{serial}'), "
-                        f"COALESCE((SELECT max({serial}) FROM {table}), 1));\n")
+                f.write(
+                    f"SELECT setval(pg_get_serial_sequence('{table}', '{serial}'), "
+                    f"COALESCE((SELECT max({serial}) FROM {table}), 1));\n"
+                )
             print(f"{table}: {len(rows):,} rows")
         f.write("COMMIT;\nANALYZE;\n")
     print(f"wrote {out} ({out.stat().st_size / 1e6:.1f} MB)")

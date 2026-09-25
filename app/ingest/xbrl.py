@@ -107,8 +107,8 @@ def fiscal_year_labels(facts: list[Fact]) -> tuple[dict[date, int], int]:
     labels: dict[date, int] = {}
     for fs in sorted(by_accession.values(), key=lambda fs: min(f.filed for f in fs)):
         current_end = max(f.end for f in fs)
-        fy = Counter(f.fy for f in fs if f.end == current_end).most_common(1)[0][0]
-        if abs(fy - current_end.year) <= 1:  # guard against mis-tagged DocumentFiscalYearFocus
+        fy = Counter(f.fy for f in fs if f.end == current_end and f.fy).most_common(1)[0][0]
+        if fy is not None and abs(fy - current_end.year) <= 1:  # guard against mis-tagged DocumentFiscalYearFocus
             labels.setdefault(current_end, fy)
 
     offsets = Counter(fy - end.year for end, fy in labels.items())
@@ -136,7 +136,8 @@ _TOKEN = re.compile(r"\s*([+-])?\s*([a-z_][a-z0-9_]*)")
 
 def parse_formula(expr: str) -> list[tuple[int, str]]:
     """'a - b + c' -> [(1, 'a'), (-1, 'b'), (1, 'c')]. Only + and - are supported."""
-    terms, pos = [], 0
+    terms: list[tuple[int, str]] = []
+    pos = 0
     expr = expr.strip()
     while pos < len(expr):
         m = _TOKEN.match(expr, pos)
@@ -192,7 +193,7 @@ def build_annual_financials(facts: list[Fact], catalog: MetricCatalog) -> list[A
                 operands = [resolved[name][fy] for _, name in terms]
                 if len({o.end for o in operands}) != 1:
                     continue  # operands must describe the same period
-                value = sum(sign * o.value for (sign, _), o in zip(terms, operands))
+                value = sum(sign * o.value for (sign, _), o in zip(terms, operands, strict=True))
                 latest = max(operands, key=lambda o: o.filed or date.min)
                 by_year[fy] = AnnualValue(
                     metric=metric.name,

@@ -5,23 +5,27 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from datetime import date, timedelta
 
-import psycopg
-
+from app.db.connection import DbConn, one
 from app.models import InsiderSeller, InsiderSummary, NotFound
 from app.services.companies import get_company
 
 
-def insider_summary(conn: psycopg.Connection, ticker: str, days: int = 365) -> InsiderSummary:
+def insider_summary(conn: DbConn, ticker: str, days: int = 365) -> InsiderSummary:
     company = get_company(conn, ticker)
     # Anchor the window on the last successful ingest, not the wall clock, so a stored
     # snapshot keeps answering "the last 12 months" consistently.
-    anchor = conn.execute(
-        """
+    anchor = (
+        one(
+            conn.execute(
+                """
         SELECT max(finished_at)::date AS d FROM ingestion_run
         WHERE ticker = %s AND source = 'insiders' AND status = 'ok'
         """,
-        (company["ticker"],),
-    ).fetchone()["d"] or date.today()
+                (company["ticker"],),
+            )
+        )["d"]
+        or date.today()
+    )
     start = anchor - timedelta(days=days)
     rows = conn.execute(
         """
@@ -66,7 +70,10 @@ def insider_summary(conn: psycopg.Connection, ticker: str, days: int = 365) -> I
         other_activity=dict(Counter(r["code"] for r in rows if r["code"] not in {"P", "S"})),
         top_sellers=[
             InsiderSeller(
-                insider=name, relationship=s["rel"], shares=s["shares"], value=s["value"],
+                insider=name,
+                relationship=s["rel"],
+                shares=s["shares"],
+                value=s["value"],
                 under_10b5_1_pct=(s["plan"] / s["value"] * 100) if s["value"] else None,
             )
             for name, s in top

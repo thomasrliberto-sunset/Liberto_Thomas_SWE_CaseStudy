@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from datetime import date
 
-import psycopg
-
+from app.db.connection import DbConn
 from app.models import NotFound, PriceBar, PriceSeries, Valuation, ValuationPoint
 from app.services.companies import get_company
 from app.services.metrics import pe_ratio, safe_ratio, split_factor
 
 
 def get_prices(
-    conn: psycopg.Connection, ticker: str, start: date | None = None, end: date | None = None,
+    conn: DbConn,
+    ticker: str,
+    start: date | None = None,
+    end: date | None = None,
     include_bars: bool = True,
 ) -> PriceSeries:
     company = get_company(conn, ticker)
@@ -42,7 +44,7 @@ def get_prices(
     )
 
 
-def _annual(conn: psycopg.Connection, company_id: int, metric: str) -> list[dict]:
+def _annual(conn: DbConn, company_id: int, metric: str) -> list[dict]:
     return conn.execute(
         """
         SELECT fiscal_year, period_end, value::float8 AS value, filed, accession
@@ -52,7 +54,7 @@ def _annual(conn: psycopg.Connection, company_id: int, metric: str) -> list[dict
     ).fetchall()
 
 
-def get_valuation(conn: psycopg.Connection, ticker: str, history_years: int = 5) -> Valuation:
+def get_valuation(conn: DbConn, ticker: str, history_years: int = 5) -> Valuation:
     """Trailing P/E and P/S from the latest close and the latest *annual* 10-K figures.
 
     The join has two alignment problems, both handled explicitly:

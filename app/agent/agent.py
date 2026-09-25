@@ -16,13 +16,13 @@ import logging
 import time
 from typing import Any
 
-import psycopg
 from pydantic import ValidationError
 
 from app.agent.grounding import check_grounding, cited_ids
 from app.agent.llm import ChatModel, LLMError, LLMUnavailable
 from app.agent.prompts import ANSWER_PROMPT, DECLINE_TEMPLATE, ROUTE_HINTS, ROUTER_PROMPT
 from app.agent.tools import SourceLedger, build_tools, run_tool, tools_for_route
+from app.db.connection import DbConn
 from app.models import AskResponse, RouteDecision, ToolCallTrace
 from app.services.companies import list_companies
 
@@ -36,7 +36,7 @@ class Agent:
 
     # ------------------------------------------------------------------ public
 
-    def ask(self, conn: psycopg.Connection, question: str) -> AskResponse:
+    def ask(self, conn: DbConn, question: str) -> AskResponse:
         """Answer one question. If the model is rate-limited or overloaded mid-way, restart the
         whole question on the next fallback model (a conversation never mixes models)."""
         for i, model in enumerate(self.llm.models):
@@ -48,7 +48,7 @@ class Agent:
                 log.warning("%s unavailable; retrying the question on %s", model, self.llm.models[i + 1])
         raise LLMError("no model configured")
 
-    def _ask(self, conn: psycopg.Connection, question: str, model: str) -> AskResponse:
+    def _ask(self, conn: DbConn, question: str, model: str) -> AskResponse:
         t0 = time.monotonic()
         companies = list_companies(conn)
         tickers = [c.ticker for c in companies]
@@ -61,8 +61,12 @@ class Agent:
                     reason=route.out_of_scope_reason or "The question needs data outside this service.",
                     tickers=", ".join(tickers),
                 ),
-                route=route, citations=[], tool_calls=[], grounding=None,
-                model=model, latency_ms=int((time.monotonic() - t0) * 1000),
+                route=route,
+                citations=[],
+                tool_calls=[],
+                grounding=None,
+                model=model,
+                latency_ms=int((time.monotonic() - t0) * 1000),
             )
 
         tools = tools_for_route(build_tools(tickers), route.route)
@@ -72,8 +76,14 @@ class Agent:
         grounding = check_grounding(answer, ledger.evidence, set(ledger.citations))
         cited = [ledger.citations[c] for c in cited_ids(answer) if c in ledger.citations]
         return AskResponse(
-            question=question, answer=answer, route=route, citations=cited, tool_calls=traces,
-            grounding=grounding, model=model, latency_ms=int((time.monotonic() - t0) * 1000),
+            question=question,
+            answer=answer,
+            route=route,
+            citations=cited,
+            tool_calls=traces,
+            grounding=grounding,
+            model=model,
+            latency_ms=int((time.monotonic() - t0) * 1000),
         )
 
     # ------------------------------------------------------------------ routing
@@ -109,7 +119,8 @@ class Agent:
             decision.route = "out_of_scope"
             decision.out_of_scope_reason = (
                 f"{', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not in the tracked universe."
-                if unknown else "The question doesn't identify which tracked company it is about."
+                if unknown
+                else "The question doesn't identify which tracked company it is about."
             )
         return decision
 
@@ -118,9 +129,12 @@ class Agent:
     def _tool_loop(self, conn, question, route, tools, ledger, catalog, model) -> tuple[str, list[ToolCallTrace]]:
         schemas = [t.schema() for t in tools.values()]
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": ANSWER_PROMPT.format(catalog=catalog, route=route.route,
-                                                               tickers=route.tickers,
-                                                               route_hint=ROUTE_HINTS[route.route])},
+            {
+                "role": "system",
+                "content": ANSWER_PROMPT.format(
+                    catalog=catalog, route=route.route, tickers=route.tickers, route_hint=ROUTE_HINTS[route.route]
+                ),
+            },
             {"role": "user", "content": question},
         ]
         traces: list[ToolCallTrace] = []
@@ -133,15 +147,25 @@ class Agent:
                 spec = tools.get(call.name)
                 t = time.monotonic()
                 before = set(ledger.citations)
+                err: str | None
                 if spec is None:  # model tried a tool outside its route
-                    content, ok, err = json.dumps({"error": f"tool {call.name} is not available"}), False, "not available"
+                    content, ok, err = (
+                        json.dumps({"error": f"tool {call.name} is not available"}),
+                        False,
+                        "not available",
+                    )
                 else:
                     content, ok, err = run_tool(spec, conn, call.arguments, ledger)
-                traces.append(ToolCallTrace(
-                    name=call.name, arguments=call.arguments, ok=ok,
-                    latency_ms=int((time.monotonic() - t) * 1000),
-                    sources=[c for c in ledger.citations if c not in before], error=err,
-                ))
+                traces.append(
+                    ToolCallTrace(
+                        name=call.name,
+                        arguments=call.arguments,
+                        ok=ok,
+                        latency_ms=int((time.monotonic() - t) * 1000),
+                        sources=[c for c in ledger.citations if c not in before],
+                        error=err,
+                    )
+                )
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
 
         # Out of rounds: ask for a final answer with what has been gathered.

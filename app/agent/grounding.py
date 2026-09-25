@@ -22,8 +22,7 @@ _CITE_BLOCK = re.compile(r"\[([A-Z]\d+(?:\s*[,;]\s*[A-Z]\d+)*)\]")
 _DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _FISCAL = re.compile(r"\b(?:FY|fiscal(?: year)?\s*)'?\d{2,4}\b", re.I)
 
-SCALE = {"trillion": 1e12, "t": 1e12, "billion": 1e9, "b": 1e9, "million": 1e6, "m": 1e6,
-         "thousand": 1e3, "k": 1e3}
+SCALE = {"trillion": 1e12, "t": 1e12, "billion": 1e9, "b": 1e9, "million": 1e6, "m": 1e6, "thousand": 1e3, "k": 1e3}
 
 
 def extract_numbers(text: str, keep_all: bool = False) -> list[tuple[str, list[tuple[float, float]]]]:
