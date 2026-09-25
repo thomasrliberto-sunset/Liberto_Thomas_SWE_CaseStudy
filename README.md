@@ -1,0 +1,180 @@
+# Fundamentals Tracker
+
+A small service that tracks fundamentals for a configurable universe (NVDA, MSFT, AAPL, GOOGL, ETN) from
+**SEC XBRL**, the **10-K narrative** (Item 1A Risk Factors, Item 7 MD&A), **Yahoo Finance** prices and,
+as a bonus, **SEC Form 4** insider trades. It serves them through a FastAPI REST API and a routed,
+tool-using natural-language endpoint (`POST /ask`) whose answers cite their sources and are checked for
+ungrounded numbers.
+
+Design rationale, tradeoffs and cuts are in **[docs/DESIGN.md](docs/DESIGN.md)**.
+
+## Run it (one command)
+
+```bash
+cp .env.example .env          # then set LLM_API_KEY (only /ask needs it)
+docker compose up --build     # Postgres + API; the DB loads the committed snapshot on first boot
+```
+
+- API docs: http://localhost:8000/docs
+- Health: http://localhost:8000/health
+
+The database is seeded from `db/init/02_seed.sql.gz`, a snapshot of a live ingest taken on
+**2026-09-25**. Everything, including `/ask`, runs without reaching SEC or Yahoo.
+
+Refresh from the live sources whenever you like:
+
+```bash
+docker compose run --rm ingest                                   # all tickers, all sources (~2 min)
+docker compose run --rm ingest --tickers NVDA --sources prices   # subset
+```
+
+Run the tests. They're unit tests, plus API tests against the seeded database:
+
+```bash
+docker compose run --rm --entrypoint pytest api
+```
+
+To reset to the snapshot, run `docker compose down -v && docker compose up`.
+
+## Configuration
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai/` | Any OpenAI-compatible `/chat/completions` base URL |
+| `LLM_API_KEY` | *(empty)* | Bearer token for that endpoint. Without it, `/ask` returns 503 and everything else works. |
+| `LLM_MODEL` | `gemini-3.8-flash` | Model name passed through to the endpoint |
+| `LLM_FALLBACK_MODELS` | *(empty)* | Optional comma-separated models; if the primary is rate-limited or overloaded (429/5xx after retries), the *whole question* is retried on the next one, so a conversation never mixes models |
+| `LLM_TIMEOUT_S`, `LLM_MAX_TOOL_ROUNDS`, `LLM_MAX_RETRIES` | `60`, `6`, `6` | Per-call timeout; cap on tool-calling rounds; retries with backoff |
+| `SEC_USER_AGENT` | `FundamentalsTracker admin@example.com` | SEC asks for a contact in the UA (live ingest only) |
+| `DB_PORT` | `5432` | Host port for Postgres, if 5432 is taken |
+
+**Model used:** Google **`gemini-3.8-flash`** (paid tier) through Google AI Studio's OpenAI-compatible
+endpoint (`https://generativelanguage.googleapis.com/v1beta/openai/`), with `temperature: 0`. It passes
+all 14 questions in [docs/eval_results.md](docs/eval_results.md).
+- `gemini-2.5-flash`, the brief's suggestion, is no longer available to new API keys.
+- During development the same questions also passed on `gemini-3.5-flash-lite`. The agent doesn't lean
+  on model strength: routing is constrained, and the arithmetic and diffs are done in code.
+
+**To point it at your proxy,** set `LLM_BASE_URL`, `LLM_API_KEY` and `LLM_MODEL` in `.env` (or the
+shell) and restart the `api` service. The client uses only standard chat-completions features:
+`tools` with `tool_choice: auto`, `response_format: {"type": "json_object"}` and `temperature: 0`.
+
+**Universe and metrics are config.** Tickers live in `config/universe.yaml`; CIKs are resolved from
+SEC's ticker list. Metric → XBRL concept mappings, with per-period fallbacks, live in
+`config/metrics.yaml`. To add a company, add one line and run `docker compose run --rm ingest`.
+
+## API
+
+| Endpoint | What it returns |
+|---|---|
+| `GET /companies` | Universe, fiscal-year ends and data coverage |
+| `GET /companies/{t}/fundamentals?metrics=&last_n=&fiscal_years=` | Annual reported metrics plus margins and YoY, each with source concept or formula and accession |
+| `GET /compare/{metric}?fiscal_year=&tickers=` | Cross-company ranking, with a fiscal-year alignment note |
+| `GET /companies/{t}/valuation` | Trailing P/E and P/S (latest close × latest annual 10-K, split-adjusted) and P/E at past fiscal year-ends |
+| `GET /companies/{t}/prices?start=&end=` | Daily OHLCV |
+| `GET /companies/{t}/filings` | Ingested 10-Ks, extracted sections, risk-factor counts |
+| `GET /companies/{t}/filings/search?q=&section=risk_factors\|mdna&which=latest\|prior\|all` | Full-text search over 10-K narrative |
+| `GET /companies/{t}/risk-factors/diff` | New, reworded and removed risk factors, latest vs prior 10-K |
+| `GET /companies/{t}/insiders?days=365` | Form 4 open-market buys and sells, 10b5-1 share, top sellers (bonus) |
+| `GET /metrics`, `GET /ingestion/runs`, `GET /health` | Metric catalog, pipeline provenance, health |
+| `POST /ask` `{"question": "..."}` | Answer, route, citations, tool trace and grounding report |
+
+## Example interactions
+
+All output below is real, from the committed snapshot.
+
+**[docs/eval_results.md](docs/eval_results.md)** has full transcripts of a 14-question evaluation run, with
+routes, tool calls, citations and grounding for each. The set is the brief's six questions plus eight
+variants: a cross-company comparison, insider activity, a cross-modal Eaton question, the Apple tariff
+risk narrative, a P/E ranking, and declines for Tesla, quarterly data and "should I buy".
+
+On `gemini-3.8-flash`, **14/14 pass**, meaning:
+- the route is as expected;
+- the four out-of-scope questions are declined with zero tool calls;
+- no answer contains a number the tools didn't return.
+
+Rerun the evaluation with `docker compose exec api python scripts/eval_questions.py --write`.
+
+### REST
+
+```bash
+curl -s "localhost:8000/companies/NVDA/fundamentals?metrics=revenue,gross_margin&last_n=2"
+```
+```json
+{"ticker": "NVDA", "periods": [
+  {"fiscal_year": 2026, "period_start": "2025-01-27", "period_end": "2026-01-25", "accession": "0001045810-26-000021",
+   "metrics": {
+     "revenue":      {"value": 215938000000.0, "display": "$215.94B", "unit": "USD", "yoy_growth": 0.6547,
+                      "source": "us-gaap:Revenues", "derived": false},
+     "gross_margin": {"value": 0.7107, "display": "71.1%", "unit": "ratio", "yoy_change_pp": -3.92,
+                      "source": "gross_profit / revenue", "derived": false}}},
+  "..."]}
+```
+
+```bash
+curl -s localhost:8000/companies/AAPL/valuation    # cross-source join: Yahoo close x 10-K EPS
+```
+```json
+{"price": 340.37, "price_date": "2026-09-25", "eps_fiscal_year": 2025, "eps_period_end": "2025-09-27",
+ "eps_diluted_adjusted": 7.46, "split_adjustment": 1.0, "trailing_pe": 45.63, "price_to_sales": 12.27,
+ "notes": ["Price is the yahoo close on 2026-09-25 (latest in the database).", "..."], "history": ["P/E at each FY end ..."]}
+```
+
+```bash
+curl -s localhost:8000/compare/operating_margin
+```
+```json
+{"basis": "each company's latest reported fiscal year",
+ "rows": [{"rank": 1, "ticker": "NVDA", "fiscal_year": 2026, "period_end": "2026-01-25", "display": "60.4%"},
+          {"rank": 2, "ticker": "MSFT", "fiscal_year": 2026, "period_end": "2026-06-30", "display": "46.8%"},
+          {"rank": 3, "ticker": "GOOGL", "fiscal_year": 2025, "period_end": "2025-12-31", "display": "32.0%"}, "..."],
+ "alignment_note": "Fiscal years are not calendar-aligned (period ends span 276 days: NVDA FY2026 ended 2026-01-25, ...)"}
+```
+
+Also try `/companies/NVDA/risk-factors/diff`,
+`/companies/MSFT/filings/search?q=Azure+revenue+growth&section=mdna` and `/companies/NVDA/insiders`.
+
+### Natural language
+
+```bash
+curl -s localhost:8000/ask -H 'content-type: application/json' \
+  -d '{"question": "How did MSFT'"'"'s revenue grow last year, and what did management attribute it to?"}'
+```
+Abridged response:
+```json
+{"route": {"route": "both", "tickers": ["MSFT"], "rationale": "Requires annual revenue growth figures ... and management's explanation ... from MD&A text."},
+ "tool_calls": [{"name": "get_financials", "sources": ["F1"]},
+                {"name": "search_filings", "arguments": {"ticker": "MSFT", "query": "...", "section": "mdna"}, "sources": ["S1", "..."]}, "..."],
+ "answer": "In the latest fiscal year (FY2026, period ended June 30, 2026), Microsoft's revenue grew to $331.84 billion, an increase of 17.8% year-over-year ... [F1, S4]. Management attributed the overall revenue increase primarily to growth in Microsoft Cloud [S4] ... Intelligent Cloud (revenue up $31.5 billion or 30%): driven by Azure and other cloud services, where revenue grew 41% ... [S3] ...",
+ "citations": [{"id": "S4", "kind": "filing_text", "description": "MSFT FY2026 10-K (filed 2026-07-29), Item 7 MD&A - SUMMARY RESULTS OF OPERATIONS > Fiscal Year 2026 Compared with Fiscal Year 2025", "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm"}, "..."],
+ "grounding": {"numbers_checked": 41, "unverified_numbers": [], "unknown_citations": [], "grounded": true},
+ "model": "gemini-3.8-flash"}
+```
+
+Two more from the evaluation:
+- *"What new risk factors did NVDA add in its latest 10-K versus the prior year?"* routes to `narrative` and
+  calls `diff_risk_factors`. The answer is one new risk factor, "Commercial arrangements expose us to
+  counterparty risks" (long-term capacity commitments, guarantees and requests to finance customers'
+  datacenter build-outs), cited `[R1]`.
+- *"What is the company's forward guidance for next quarter?"* routes to `out_of_scope`. The service
+  returns a fixed decline in about 1.5 s with no tool calls: *"I can't answer that from the data this
+  service has..."*, then lists what it can answer.
+
+## Project layout
+
+```
+app/
+  ingest/      SEC client (rate limit, UA, retries), XBRL normalization, 10-K section/risk-factor
+               extraction, prices, Form 4, pipeline + CLI (python -m app.ingest)
+  services/    read-side queries + pure metric math, shared by the API and the agent
+  api/         FastAPI app and routers
+  agent/       LLM client, router, tools, tool loop, grounding check, prompts
+config/        universe.yaml, metrics.yaml
+db/init/       01_schema.sql (DDL), 02_seed.sql.gz (snapshot)
+scripts/       export_seed.py (DB -> snapshot)
+tests/         unit tests (parsers, normalization, metrics, diff, agent with a fake LLM) + API tests
+docs/          DESIGN.md
+```
+
+To refresh the committed snapshot after a live ingest:
+`docker compose run --rm -v "$PWD/db/init:/app/db/init" --entrypoint python api scripts/export_seed.py`

@@ -1,0 +1,17 @@
+# The tracked universe. Adding or swapping a company is a one-line change here,
+# followed by `docker compose run --rm ingest`. CIKs are resolved automatically
+# from SEC's company_tickers.json; set `cik` only to pin an override.
+companies:
+  - ticker: NVDA
+  - ticker: MSFT
+  - ticker: AAPL
+  - ticker: GOOGL
+  - ticker: ETN
+
+ingest:
+  tenk_filings: 2              # latest N annual reports for narrative text
+  price_history_years: 6       # daily prices, enough to cover the fundamentals window
+  insider_lookback_days: 365   # Form 4 window (bonus dataset)
+  sections:                    # 10-K items extracted as narrative text
+    - "1A"                     # Risk Factors
+    - "7"                      # MD&A

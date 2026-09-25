@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: fundamentals
+      POSTGRES_USER: tracker
+      POSTGRES_PASSWORD: tracker
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # First boot of an empty volume runs these in order: schema, then the committed snapshot.
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tracker -d fundamentals"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://tracker:tracker@db:5432/fundamentals
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai/}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-gemini-3.8-flash}
+      LLM_FALLBACK_MODELS: ${LLM_FALLBACK_MODELS:-}
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Live refresh from SEC EDGAR + Yahoo Finance. Not started by `up`; run on demand:
+  #   docker compose run --rm ingest                 (everything)
+  #   docker compose run --rm ingest --tickers NVDA --sources prices
+  ingest:
+    build: .
+    profiles: ["ingest"]
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://tracker:tracker@db:5432/fundamentals
+      SEC_USER_AGENT: ${SEC_USER_AGENT:-FundamentalsTracker admin@example.com}
+    entrypoint: ["python", "-m", "app.ingest"]
+
+volumes:
+  pgdata:

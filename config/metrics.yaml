@@ -1,0 +1,104 @@
+# Canonical metric -> XBRL concept mapping.
+#
+# `concepts` are tried in priority order *per fiscal period*, because filers
+# change tags over time (e.g. SalesRevenueNet -> RevenueFromContractWithCustomer...
+# after ASC 606). The chosen concept is stored alongside every value for traceability.
+#
+# `fallback` is an arithmetic formula over other *reported* metrics, used only when
+# no concept is reported for that period (e.g. Alphabet has no GrossProfit tag).
+# Values produced by a fallback are flagged as derived in the API.
+
+reported:
+  revenue:
+    label: Revenue
+    unit: USD
+    concepts:
+      - RevenueFromContractWithCustomerExcludingAssessedTax
+      - Revenues
+      - SalesRevenueNet
+      - RevenueFromContractWithCustomerIncludingAssessedTax
+      - SalesRevenueGoodsNet
+
+  cost_of_revenue:
+    label: Cost of revenue
+    unit: USD
+    concepts:
+      - CostOfRevenue
+      - CostOfGoodsAndServicesSold
+      - CostOfGoodsSold
+      - CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization
+
+  gross_profit:
+    label: Gross profit
+    unit: USD
+    concepts: [GrossProfit]
+    fallback: revenue - cost_of_revenue
+
+  sga_expense:
+    label: Selling, general & administrative
+    unit: USD
+    concepts:
+      - SellingGeneralAndAdministrativeExpense
+
+  rnd_expense:
+    label: Research & development
+    unit: USD
+    concepts:
+      - ResearchAndDevelopmentExpense
+      - ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost
+
+  operating_income:
+    label: Operating income
+    unit: USD
+    concepts: [OperatingIncomeLoss]
+    fallback: gross_profit - sga_expense - rnd_expense
+
+  net_income:
+    label: Net income
+    unit: USD
+    concepts:
+      - NetIncomeLoss
+      - NetIncomeLossAvailableToCommonStockholdersBasic
+      - ProfitLoss
+
+  eps_diluted:
+    label: Diluted EPS
+    unit: USD/shares
+    concepts: [EarningsPerShareDiluted]
+
+  eps_basic:
+    label: Basic EPS
+    unit: USD/shares
+    concepts: [EarningsPerShareBasic]
+
+  diluted_shares:
+    label: Weighted avg. diluted shares
+    unit: shares
+    concepts: [WeightedAverageNumberOfDilutedSharesOutstanding]
+
+  operating_cash_flow:
+    label: Operating cash flow
+    unit: USD
+    concepts:
+      - NetCashProvidedByUsedInOperatingActivities
+      - NetCashProvidedByUsedInOperatingActivitiesContinuingOperations
+
+  capex:
+    label: Capital expenditures
+    unit: USD
+    concepts:
+      - PaymentsToAcquirePropertyPlantAndEquipment
+      - PaymentsToAcquireProductiveAssets
+
+  free_cash_flow:
+    label: Free cash flow
+    unit: USD
+    concepts: []
+    fallback: operating_cash_flow - capex
+
+# Ratios computed at read time from the reported metrics above.
+derived:
+  gross_margin:      {label: Gross margin,     numerator: gross_profit,     denominator: revenue}
+  operating_margin:  {label: Operating margin, numerator: operating_income, denominator: revenue}
+  net_margin:        {label: Net margin,       numerator: net_income,       denominator: revenue}
+  fcf_margin:        {label: FCF margin,       numerator: free_cash_flow,   denominator: revenue}
