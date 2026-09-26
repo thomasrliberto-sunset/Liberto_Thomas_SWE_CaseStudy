@@ -36,6 +36,12 @@ docker compose run --rm --entrypoint pytest api
 
 To reset to the snapshot, run `docker compose down -v && docker compose up`.
 
+`make up`, `make test`, `make lint`, `make ingest`, `make eval` and `make seed` wrap the same commands.
+
+**CI** (`.github/workflows/ci.yml`) runs two jobs on every push:
+- **lint, types and tests:** ruff, mypy and pytest against Postgres 16 loaded with the schema and snapshot;
+- **stack check:** `docker compose up --wait` followed by an API smoke test.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -70,12 +76,13 @@ SEC's ticker list. Metric → XBRL concept mappings, with per-period fallbacks, 
 | `GET /companies` | Universe, fiscal-year ends and data coverage |
 | `GET /companies/{t}/fundamentals?metrics=&last_n=&fiscal_years=` | Annual reported metrics plus margins and YoY, each with source concept or formula and accession |
 | `GET /compare/{metric}?fiscal_year=&tickers=` | Cross-company ranking, with a fiscal-year alignment note |
-| `GET /companies/{t}/valuation` | Trailing P/E and P/S (latest close × latest annual 10-K, split-adjusted) and P/E at past fiscal year-ends |
+| `GET /companies/{t}/valuation` | Trailing P/E and P/S (latest close × latest annual 10-K, split-adjusted). Also the same multiples on **TTM** figures (fiscal year rolled forward with 10-Q year-to-date data), and P/E at past fiscal year-ends |
 | `GET /companies/{t}/prices?start=&end=` | Daily OHLCV |
 | `GET /companies/{t}/filings` | Ingested 10-Ks, extracted sections, risk-factor counts |
 | `GET /companies/{t}/filings/search?q=&section=risk_factors\|mdna&which=latest\|prior\|all` | Full-text search over 10-K narrative |
 | `GET /companies/{t}/risk-factors/diff` | New, reworded and removed risk factors, latest vs prior 10-K |
 | `GET /companies/{t}/insiders?days=365` | Form 4 open-market buys and sells, 10b5-1 share, top sellers (bonus) |
+| `GET /companies/{t}/quality` | Data-quality checks: coverage, derived-vs-reported metrics, accounting identities, section-extraction fallbacks, price gaps, ingest status |
 | `GET /metrics`, `GET /ingestion/runs`, `GET /health` | Metric catalog, pipeline provenance, health |
 | `POST /ask` `{"question": "..."}` | Answer, route, citations, tool trace and grounding report |
 
@@ -88,7 +95,7 @@ routes, tool calls, citations and grounding for each. The set is the brief's six
 variants: a cross-company comparison, insider activity, a cross-modal Eaton question, the Apple tariff
 risk narrative, a P/E ranking, and declines for Tesla, quarterly data and "should I buy".
 
-On `gemini-3.8-flash`, **14/14 pass**, meaning:
+On `gemini-3.8-flash`, **14/14 pass in each of three consecutive runs (42/42)**, meaning:
 - the route is as expected;
 - the four out-of-scope questions are declined with zero tool calls;
 - no answer contains a number the tools didn't return.
@@ -112,12 +119,25 @@ curl -s "localhost:8000/companies/NVDA/fundamentals?metrics=revenue,gross_margin
 ```
 
 ```bash
-curl -s localhost:8000/companies/AAPL/valuation    # cross-source join: Yahoo close x 10-K EPS
+curl -s localhost:8000/companies/AAPL/valuation    # cross-source join: Yahoo close x 10-K / 10-Q EPS
 ```
 ```json
 {"price": 340.37, "price_date": "2026-09-25", "eps_fiscal_year": 2025, "eps_period_end": "2025-09-27",
  "eps_diluted_adjusted": 7.46, "split_adjustment": 1.0, "trailing_pe": 45.63, "price_to_sales": 12.27,
- "notes": ["Price is the yahoo close on 2026-09-25 (latest in the database).", "..."], "history": ["P/E at each FY end ..."]}
+ "ttm": {"period_start": "2025-06-28", "period_end": "2026-06-27", "eps_diluted": 8.72, "pe": 39.03, "price_to_sales": 10.94,
+         "method": "FY2025 + 9-month YTD from the latest 10-Q - the same period a year earlier. ..."},
+ "notes": ["..."], "history": ["P/E at each FY end ..."]}
+```
+Apple's latest annual EPS is a year old, so the TTM P/E (39.0x) is lower than the annual-EPS
+P/E (45.6x) the brief specifies. Both are returned, each with its period stated.
+
+```bash
+curl -s localhost:8000/companies/ETN/quality
+```
+```json
+{"ticker": "ETN", "status": "info", "checks": [
+  {"check": "derived_metrics", "status": "info", "detail": "gross_profit = revenue - cost_of_revenue; operating_income = gross_profit - sga_expense - rnd_expense (no XBRL tag reported)"},
+  {"check": "filing_text", "status": "info", "detail": "FY2025 Item 7 located via title-heading fallback; ..."}, "..."]}
 ```
 
 ```bash
@@ -171,9 +191,10 @@ app/
   agent/       LLM client, router, tools, tool loop, grounding check, prompts
 config/        universe.yaml, metrics.yaml
 db/init/       01_schema.sql (DDL), 02_seed.sql.gz (snapshot)
-scripts/       export_seed.py (DB -> snapshot)
-tests/         unit tests (parsers, normalization, metrics, diff, agent with a fake LLM) + API tests
-docs/          DESIGN.md
+scripts/       export_seed.py (DB -> snapshot), eval_questions.py (/ask evaluation set)
+tests/         unit tests (parsers, normalization, metrics, TTM, diff, agent with a fake LLM) + API tests
+docs/          DESIGN.md, eval_results.md
+.github/       CI: lint + types + tests on Postgres 16, and a docker compose smoke test
 ```
 
 To refresh the committed snapshot after a live ingest:

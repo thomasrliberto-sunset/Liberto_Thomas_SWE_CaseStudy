@@ -34,6 +34,17 @@ snapshot with no live dependency.
 | Bonus | `insider_transaction` | Form 4 non-derivative transactions with 10b5-1 flag. |
 | Ops | `ingestion_run` | Status, row counts and warnings for every step (exposed at `/ingestion/runs`). |
 
+**Data-quality report** (`/companies/{t}/quality`). Workarounds are disclosed, not hidden. The report lists:
+- which metrics are derived, not tagged, and by what formula;
+- which 10-K sections needed the title-heading fallback;
+- accounting identities that failed: gross profit vs. revenue minus cost of revenue, margins within bounds,
+  operating income no greater than gross profit, EPS roughly equal to net income ÷ diluted shares (a basis
+  or split check);
+- price freshness and gaps;
+- the last ingest status for each source.
+
+All five tickers pass the identity checks.
+
 Ratios (margins) and growth are **computed at read time** from canonical values, so each formula
 is defined in exactly one place (`app/services/metrics.py`, `config/metrics.yaml`).
 
@@ -67,8 +78,11 @@ P/S = (close × FY diluted shares) ÷ FY revenue. The two sources disagree in tw
 1. *Share basis.* Yahoo closes are split-adjusted to today, while EPS is on the share count at
    filing time. EPS is divided by the product of splits after the filing date. The same rule
    gives a historical P/E at each fiscal-year end.
-2. *Staleness.* Annual EPS can be up to 15 months old. The response states the price date, the
-   EPS fiscal year and period end, and that TTM is not used.
+2. *Staleness.* Annual EPS can be up to 15 months old. The brief's P/E, on the latest annual
+   EPS, is the headline figure. Alongside it the service computes **TTM** figures:
+   `FY + current 10-Q YTD − prior-year YTD`, each component split-adjusted by its own filing date.
+   For Apple that moves the P/E from 45.6x (EPS through Sep-2025) to 39.0x (through Jun-2026).
+   Every figure carries its period.
 
 "Which company had the highest margin last year" defaults to **each company's latest fiscal year**
 and returns an alignment note when period ends differ (they span about 9 months here).
@@ -108,7 +122,8 @@ The LLM is **not** used for:
 
 **Evaluation.** `scripts/eval_questions.py` runs 14 questions: the brief's six plus eight variants,
 including four questions that should be declined. It checks the route, checks that declines make no
-tool calls, and checks grounding. Results are in `docs/eval_results.md`: 14/14 on `gemini-3.8-flash`.
+tool calls, and checks grounding. On `gemini-3.8-flash` it scored 14/14 in each of three consecutive
+runs (42/42), at temperature 0. Transcripts are in `docs/eval_results.md`.
 
 Two changes came directly from the evaluation:
 - The prompt now forbids cross-company arithmetic. The grounding check had caught the model computing
@@ -126,7 +141,7 @@ Two changes came directly from the evaluation:
 |---|---|---|
 | Postgres full-text search over embeddings | No embedding model to host or proxy. Deterministic. Financial questions are keyword-heavy, and chunks carry headings (weight A). | Weaker on paraphrase. pgvector would slot into `filing_chunk` if needed. |
 | Hand-rolled OpenAI-compatible client, no agent framework | About 100 lines. Works against any proxy. Every step is visible in the trace. | No streaming or tracing UI. |
-| Annual data only | Matches the questions and the "latest annual EPS" P/E spec. | No quarterly or TTM figures. Those are declined, not approximated. |
+| Annual fundamentals; TTM only for valuation | Matches the questions and the "latest annual EPS" P/E spec. TTM EPS and revenue are derived from 10-Q year-to-date facts for the valuation multiples. | No standalone quarterly series. Quarterly questions are declined, not approximated. |
 | Latest-filed (restated) values | Consistent basis for comparisons and splits. | "As originally reported" is still available in `xbrl_fact`, but not exposed. |
 | Seed as `COPY` SQL in `docker-entrypoint-initdb.d` | `docker compose up` is fully offline and deterministic. | 2.4 MB committed. Refresh with the ingest job plus `scripts/export_seed.py`. |
 
