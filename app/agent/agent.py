@@ -19,14 +19,32 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.agent.grounding import check_grounding, cited_ids
-from app.agent.llm import ChatModel, LLMError, LLMUnavailable
+from app.agent.llm import ChatModel, ChatResult, LLMError, LLMUnavailable
 from app.agent.prompts import ANSWER_PROMPT, DECLINE_TEMPLATE, ROUTE_HINTS, ROUTER_PROMPT
 from app.agent.tools import SourceLedger, build_tools, run_tool, tools_for_route
 from app.db.connection import DbConn
-from app.models import AskResponse, RouteDecision, ToolCallTrace
+from app.models import AskResponse, LLMUsage, RouteDecision, ToolCallTrace
 from app.services.companies import list_companies
 
 log = logging.getLogger(__name__)
+
+
+class _Meter:
+    """Counts calls and tokens for one question (the Agent itself is shared across requests)."""
+
+    def __init__(self, llm: ChatModel) -> None:
+        self._llm = llm
+        self.calls = self.prompt_tokens = self.completion_tokens = 0
+
+    def chat(self, messages: list[dict[str, Any]], **kwargs: Any) -> ChatResult:
+        result = self._llm.chat(messages, **kwargs)
+        self.calls += 1
+        self.prompt_tokens += int(result.usage.get("prompt_tokens") or 0)
+        self.completion_tokens += int(result.usage.get("completion_tokens") or 0)
+        return result
+
+    def usage(self) -> LLMUsage:
+        return LLMUsage(calls=self.calls, prompt_tokens=self.prompt_tokens, completion_tokens=self.completion_tokens)
 
 
 class Agent:
@@ -50,9 +68,10 @@ class Agent:
 
     def _ask(self, conn: DbConn, question: str, model: str) -> AskResponse:
         t0 = time.monotonic()
+        meter = _Meter(self.llm)
         companies = list_companies(conn)
         tickers = [c.ticker for c in companies]
-        route = self.route(question, companies, model)
+        route = self.route(question, companies, model, meter)
 
         if route.route == "out_of_scope":
             return AskResponse(
@@ -67,11 +86,12 @@ class Agent:
                 grounding=None,
                 model=model,
                 latency_ms=int((time.monotonic() - t0) * 1000),
+                usage=meter.usage(),
             )
 
         tools = tools_for_route(build_tools(tickers), route.route)
         ledger = SourceLedger()
-        answer, traces = self._tool_loop(conn, question, route, tools, ledger, self._catalog(companies), model)
+        answer, traces = self._tool_loop(conn, question, route, tools, ledger, self._catalog(companies), model, meter)
 
         grounding = check_grounding(answer, ledger.evidence, set(ledger.citations))
         cited = [ledger.citations[c] for c in cited_ids(answer) if c in ledger.citations]
@@ -84,11 +104,15 @@ class Agent:
             grounding=grounding,
             model=model,
             latency_ms=int((time.monotonic() - t0) * 1000),
+            usage=meter.usage(),
         )
 
     # ------------------------------------------------------------------ routing
 
-    def route(self, question: str, companies: list, model: str | None = None) -> RouteDecision:
+    def route(
+        self, question: str, companies: list, model: str | None = None, meter: _Meter | None = None
+    ) -> RouteDecision:
+        llm = meter or self.llm
         universe = {c.ticker for c in companies}
         listing = "\n".join(f"- {c.ticker}: {c.name}" for c in companies)
         messages = [
@@ -97,7 +121,7 @@ class Agent:
         ]
         decision: RouteDecision | None = None
         for attempt in range(2):
-            result = self.llm.chat(messages, json_mode=True, model=model)
+            result = llm.chat(messages, json_mode=True, model=model)
             try:
                 decision = RouteDecision.model_validate(json.loads(_strip_fences(result.content or "")))
                 break
@@ -126,7 +150,9 @@ class Agent:
 
     # ------------------------------------------------------------------ tool loop
 
-    def _tool_loop(self, conn, question, route, tools, ledger, catalog, model) -> tuple[str, list[ToolCallTrace]]:
+    def _tool_loop(
+        self, conn, question, route, tools, ledger, catalog, model, meter
+    ) -> tuple[str, list[ToolCallTrace]]:
         schemas = [t.schema() for t in tools.values()]
         messages: list[dict[str, Any]] = [
             {
@@ -139,7 +165,7 @@ class Agent:
         ]
         traces: list[ToolCallTrace] = []
         for _ in range(self.max_tool_rounds):
-            result = self.llm.chat(messages, tools=schemas, model=model)
+            result = meter.chat(messages, tools=schemas, model=model)
             if not result.tool_calls:
                 return (result.content or "").strip(), traces
             messages.append(result.raw_message)
@@ -170,7 +196,7 @@ class Agent:
 
         # Out of rounds: ask for a final answer with what has been gathered.
         messages.append({"role": "user", "content": "Answer now using only the tool results above."})
-        result = self.llm.chat(messages, model=model)
+        result = meter.chat(messages, model=model)
         return (result.content or "").strip(), traces
 
     @staticmethod

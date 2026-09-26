@@ -129,6 +129,7 @@ def test_route_scopes_the_toolset_and_answer_is_grounded():
     assert [t.name for t in resp.tool_calls] == ["get_financials", "search_filings"]
     assert {c.id for c in resp.citations} == {"F1", "S1"}
     assert resp.grounding.grounded, resp.grounding
+    assert resp.usage.calls == 3  # router + one tool round + final answer
 
 
 def test_numbers_route_cannot_use_text_tools():

@@ -294,6 +294,12 @@ class GroundingReport(BaseModel):
     grounded: bool
 
 
+class LLMUsage(BaseModel):
+    calls: int
+    prompt_tokens: int
+    completion_tokens: int
+
+
 class AskResponse(BaseModel):
     question: str
     answer: str
@@ -303,3 +309,4 @@ class AskResponse(BaseModel):
     grounding: GroundingReport | None
     model: str
     latency_ms: int
+    usage: LLMUsage | None = Field(None, description="LLM calls and tokens spent on this question")
