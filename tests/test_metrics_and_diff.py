@@ -3,6 +3,7 @@ from datetime import date
 import pytest
 
 from app.services.filings import compare_risk_factors, to_or_tsquery
+from app.services.market import _ttm
 from app.services.metrics import consecutive_years, fmt_value, pe_ratio, split_factor, yoy_growth
 from app.services.ttm import YtdFact, trailing_twelve_months
 
@@ -87,9 +88,74 @@ def test_ttm_rolls_fiscal_year_forward_with_ytd_and_adjusts_splits():
 
     # a 2-for-1 split after the 10-K but before the 10-Q: the FY figure is halved to today's basis
     split = [(date(2026, 3, 1), 2.0)]
-    t2 = trailing_twelve_months(date(2024, 9, 29), date(2025, 9, 27), 7.46, date(2025, 10, 31), ytd, split)
+    t2 = trailing_twelve_months(
+        date(2024, 9, 29),
+        date(2025, 9, 27),
+        7.46,
+        date(2025, 10, 31),
+        ytd,
+        split,
+        per_share=True,
+    )
     assert t2.fy_value == pytest.approx(3.73)
 
     # no 10-Q since the 10-K: TTM is just the fiscal year
     t3 = trailing_twelve_months(date(2024, 9, 29), date(2025, 9, 27), 7.46, date(2025, 10, 31), [])
     assert t3.is_annual_only and t3.value == pytest.approx(7.46)
+
+
+def test_ttm_does_not_split_adjust_absolute_values():
+    ytd = [
+        YtdFact(date(2025, 9, 28), date(2026, 6, 27), 60.0, date(2026, 8, 1), "Q3"),
+        YtdFact(date(2024, 9, 29), date(2025, 6, 28), 50.0, date(2026, 8, 1), "Q3"),
+    ]
+    split = [(date(2026, 3, 1), 2.0)]
+
+    revenue = trailing_twelve_months(date(2024, 9, 29), date(2025, 9, 27), 100.0, date(2025, 10, 31), ytd, split)
+
+    assert revenue.fy_value == pytest.approx(100.0)
+    assert revenue.value == pytest.approx(110.0)
+
+
+@pytest.mark.parametrize(
+    ("unit", "expected_fy", "expected_ttm"),
+    [("USD", 1000.0, 1100.0), ("USD/shares", 500.0, 600.0)],
+)
+def test_market_ttm_uses_the_metric_unit_to_decide_split_adjustment(unit, expected_fy, expected_ttm):
+    class Result:
+        def fetchall(self):
+            return [
+                {
+                    "period_start": date(2025, 9, 28),
+                    "period_end": date(2026, 6, 27),
+                    "value": 800.0,
+                    "filed": date(2026, 8, 1),
+                    "accession": "Q3-current",
+                },
+                {
+                    "period_start": date(2024, 9, 29),
+                    "period_end": date(2025, 6, 28),
+                    "value": 700.0,
+                    "filed": date(2026, 8, 1),
+                    "accession": "Q3-prior",
+                },
+            ]
+
+    class Connection:
+        def execute(self, *_args):
+            return Result()
+
+    fy_revenue = {
+        "source_concept": "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax",
+        "period_start": date(2024, 9, 29),
+        "period_end": date(2025, 9, 27),
+        "value": 1000.0,
+        "filed": date(2025, 10, 31),
+        "unit": unit,
+    }
+
+    result = _ttm(Connection(), 1, fy_revenue, [(date(2026, 3, 1), 2.0)])  # type: ignore[arg-type]
+
+    assert result is not None
+    assert result.fy_value == pytest.approx(expected_fy)
+    assert result.value == pytest.approx(expected_ttm)

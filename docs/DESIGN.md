@@ -57,8 +57,9 @@ diluted shares ÷ FY revenue. Two alignment problems:
 1. *Share basis.* Yahoo closes are split-adjusted to today; EPS is on the share count at filing time.
    EPS is divided by the splits after its filing date (the same rule gives P/E at past FY-ends).
 2. *Staleness.* Annual EPS can be 15 months old. The brief's annual P/E stays the headline figure,
-   and the service also computes **TTM**: `FY + current 10-Q YTD − prior-year YTD`, each component
-   split-adjusted by its own filing date. For Apple: 45.6x on EPS through Sep-2025, 39.0x through Jun-2026.
+   and the service also computes **TTM**: `FY + current 10-Q YTD − prior-year YTD`. Stock-split
+   adjustment is applied only to per-share EPS components, never to absolute revenue. For Apple: 45.6x
+   on EPS through Sep-2025, 39.0x through Jun-2026.
 
 "Highest margin last year" means **each company's latest fiscal year**, with an alignment note because
 period ends here span about 9 months.

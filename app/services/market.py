@@ -55,7 +55,12 @@ def _annual(conn: DbConn, company_id: int, metric: str) -> list[dict]:
     ).fetchall()
 
 
-def _ttm(conn: DbConn, company_id: int, fy_row: dict | None, splits: list[tuple[date, float]]) -> TTM | None:
+def _ttm(
+    conn: DbConn,
+    company_id: int,
+    fy_row: dict | None,
+    splits: list[tuple[date, float]],
+) -> TTM | None:
     """Roll a reported annual metric forward with 10-Q year-to-date facts for the same concept."""
     if not fy_row or not fy_row["source_concept"] or not fy_row["period_start"]:
         return None  # derived metrics have no single concept to roll forward
@@ -72,7 +77,13 @@ def _ttm(conn: DbConn, company_id: int, fy_row: dict | None, splits: list[tuple[
     ).fetchall()
     facts = [YtdFact(r["period_start"], r["period_end"], r["value"], r["filed"], r["accession"]) for r in rows]
     return trailing_twelve_months(
-        fy_row["period_start"], fy_row["period_end"], fy_row["value"], fy_row["filed"], facts, splits
+        fy_row["period_start"],
+        fy_row["period_end"],
+        fy_row["value"],
+        fy_row["filed"],
+        facts,
+        splits,
+        per_share=str(fy_row["unit"]).endswith("/shares"),
     )
 
 

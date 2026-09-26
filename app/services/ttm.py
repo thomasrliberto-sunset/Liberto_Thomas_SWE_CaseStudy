@@ -7,8 +7,8 @@ reading "trailing P/E" usually wants TTM. This is pure: it takes the annual valu
 10-Q facts for the same XBRL concept, so it is testable without a database.
 
 EPS is not strictly additive (share counts move between quarters); summing YTD EPS is the
-standard approximation and is labelled as such. Every component is put on today's share
-basis with the split factor for splits after that component's filing date.
+standard approximation and is labelled as such. For per-share metrics, every component is
+put on today's share basis with the split factor for splits after that component's filing date.
 """
 
 from __future__ import annotations
@@ -61,12 +61,18 @@ def trailing_twelve_months(
     fy_filed: date,
     ytd_facts: list[YtdFact],
     splits: list[tuple[date, float]] | None = None,
+    *,
+    per_share: bool = False,
 ) -> TTM:
-    """Roll the latest fiscal year forward with the most recent 10-Q year-to-date figure."""
+    """Roll the latest fiscal year forward with the most recent 10-Q year-to-date figure.
+
+    Stock splits adjust per-share values such as EPS, but must never scale absolute values
+    such as revenue.
+    """
     splits = splits or []
 
     def adj(value: float, filed: date) -> float:
-        return value / split_factor(splits, filed)
+        return value / split_factor(splits, filed) if per_share else value
 
     fy_adj = adj(fy_value, fy_filed)
     # current-year YTD: starts right after the fiscal year ended, the longest one wins
