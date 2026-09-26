@@ -22,8 +22,8 @@ jobs:
     env:
       DATABASE_URL: postgresql://tracker:tracker@localhost:5432/fundamentals
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -40,7 +40,7 @@ jobs:
     name: docker compose up (the reviewer path)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Bring up the stack and wait for health checks
         run: docker compose up -d --build --wait
       - name: Smoke test
