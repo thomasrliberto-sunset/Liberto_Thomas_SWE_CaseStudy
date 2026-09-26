@@ -156,7 +156,7 @@ def _valuation(conn, args, ledger: SourceLedger):
         sid = ledger.add(
             "valuation",
             f"{v.ticker} trailing P/E & P/S: {v.price_source} close {v.price_date} x FY{v.eps_fiscal_year} "
-            "10-K (SEC XBRL)",
+            "10-K" + (f" and TTM through {v.ttm.period_end}" if v.ttm else "") + " (SEC XBRL)",
             ticker=v.ticker,
         )
         out.append(
@@ -178,7 +178,7 @@ def _valuation(conn, args, ledger: SourceLedger):
                         "method": v.ttm.method,
                     }
                     if v.ttm
-                    else "not available: no 10-Q filed since the latest 10-K"
+                    else "not available"
                 ),
                 "pe_at_fiscal_year_ends": [
                     {"fiscal_year": h.fiscal_year, "pe": f"{h.pe:.1f}x" if h.pe else None} for h in v.history

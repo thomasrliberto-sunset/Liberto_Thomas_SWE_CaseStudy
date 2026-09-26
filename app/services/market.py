@@ -113,8 +113,15 @@ def get_valuation(conn: DbConn, ticker: str, history_years: int = 5) -> Valuatio
     ttm_eps = _ttm(conn, cid, eps, splits)
     ttm_rev = _ttm(conn, cid, revenue, splits)
     ttm = None
-    if ttm_eps and not ttm_eps.is_annual_only:
-        rev_value = ttm_rev.value if ttm_rev and ttm_rev.period_end == ttm_eps.period_end else None
+    if ttm_eps:
+        same_period = ttm_rev is not None and ttm_rev.period_end == ttm_eps.period_end
+        rev_value = ttm_rev.value if ttm_rev and same_period else None
+        method = (
+            f"The latest filing is the FY{eps['fiscal_year']} 10-K, so the trailing twelve months are that fiscal year."
+            if ttm_eps.is_annual_only
+            else f"FY{eps['fiscal_year']} + {ttm_eps.ytd_months}-month YTD from the latest 10-Q - the same period "
+            "a year earlier. TTM EPS sums EPS across periods (standard approximation)."
+        )
         ttm = TrailingTwelveMonths(
             period_start=ttm_eps.period_start,
             period_end=ttm_eps.period_end,
@@ -122,18 +129,15 @@ def get_valuation(conn: DbConn, ticker: str, history_years: int = 5) -> Valuatio
             revenue=rev_value,
             pe=pe_ratio(px["close"], ttm_eps.value),
             price_to_sales=safe_ratio(market_cap, rev_value),
-            through_filing=ttm_eps.source_accession,
-            method=(
-                f"FY{eps['fiscal_year']} + {ttm_eps.ytd_months}-month YTD from the latest 10-Q - the same "
-                "period a year earlier. TTM EPS sums EPS across periods (standard approximation)."
-            ),
+            through_filing=ttm_eps.source_accession or eps["accession"],
+            method=method,
         )
 
     notes = [
         f"Price is the {px['source']} close on {px['date'].isoformat()} (latest in the database).",
         f"trailing_pe uses diluted EPS for FY{eps['fiscal_year']} (period ended {eps['period_end'].isoformat()}), "
         "the latest annual figure"
-        + (f"; `ttm` rolls it forward to {ttm.period_end.isoformat()} with 10-Q data." if ttm else "."),
+        + (f"; `ttm` covers the twelve months to {ttm.period_end.isoformat()}." if ttm else "."),
     ]
     if factor != 1.0:
         notes.append(f"EPS divided by {factor:g} for stock splits after the 10-K was filed.")
