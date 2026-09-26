@@ -92,7 +92,8 @@ It is **not** used for:
 **Failure modes handled:** hallucinated numbers (grounding check); unknown tickers (universe check);
 tool errors (returned to the model as data, recorded in the trace); runaway loops
 (`LLM_MAX_TOOL_ROUNDS`); provider 429/5xx (backoff, then `LLM_FALLBACK_MODELS` retries the *whole*
-question on the next model so a conversation never mixes models).
+question on the next model so a conversation never mixes models). Each response reports its
+latency, LLM calls and tokens, so cost per question is visible.
 
 **Evaluation.** `scripts/eval_questions.py` runs 14 questions: the brief's six plus eight variants,
 four of which must be declined. It checks the route, that declines make no tool calls, and grounding.

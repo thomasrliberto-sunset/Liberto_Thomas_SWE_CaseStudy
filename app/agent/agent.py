@@ -21,9 +21,9 @@ from pydantic import ValidationError
 from app.agent.grounding import check_grounding, cited_ids
 from app.agent.llm import ChatModel, ChatResult, LLMError, LLMUnavailable
 from app.agent.prompts import ANSWER_PROMPT, DECLINE_TEMPLATE, ROUTE_HINTS, ROUTER_PROMPT
-from app.agent.tools import SourceLedger, build_tools, run_tool, tools_for_route
+from app.agent.tools import SourceLedger, ToolSpec, build_tools, run_tool, tools_for_route
 from app.db.connection import DbConn
-from app.models import AskResponse, LLMUsage, RouteDecision, ToolCallTrace
+from app.models import AskResponse, CompanySummary, LLMUsage, RouteDecision, ToolCallTrace
 from app.services.companies import list_companies
 
 log = logging.getLogger(__name__)
@@ -110,7 +110,11 @@ class Agent:
     # ------------------------------------------------------------------ routing
 
     def route(
-        self, question: str, companies: list, model: str | None = None, meter: _Meter | None = None
+        self,
+        question: str,
+        companies: list[CompanySummary],
+        model: str | None = None,
+        meter: _Meter | None = None,
     ) -> RouteDecision:
         llm = meter or self.llm
         universe = {c.ticker for c in companies}
@@ -151,7 +155,15 @@ class Agent:
     # ------------------------------------------------------------------ tool loop
 
     def _tool_loop(
-        self, conn, question, route, tools, ledger, catalog, model, meter
+        self,
+        conn: DbConn,
+        question: str,
+        route: RouteDecision,
+        tools: dict[str, ToolSpec],
+        ledger: SourceLedger,
+        catalog: str,
+        model: str,
+        meter: _Meter,
     ) -> tuple[str, list[ToolCallTrace]]:
         schemas = [t.schema() for t in tools.values()]
         messages: list[dict[str, Any]] = [
@@ -200,7 +212,7 @@ class Agent:
         return (result.content or "").strip(), traces
 
     @staticmethod
-    def _catalog(companies: list) -> str:
+    def _catalog(companies: list[CompanySummary]) -> str:
         lines = []
         for c in companies:
             fys = c.fiscal_years_available

@@ -162,13 +162,15 @@ curl -s localhost:8000/ask -H 'content-type: application/json' \
 ```
 Abridged response:
 ```json
-{"route": {"route": "both", "tickers": ["MSFT"], "rationale": "Requires annual revenue growth figures ... and management's explanation ... from MD&A text."},
- "tool_calls": [{"name": "get_financials", "sources": ["F1"]},
-                {"name": "search_filings", "arguments": {"ticker": "MSFT", "query": "...", "section": "mdna"}, "sources": ["S1", "..."]}, "..."],
- "answer": "In the latest fiscal year (FY2026, period ended June 30, 2026), Microsoft's revenue grew to $331.84 billion, an increase of 17.8% year-over-year ... [F1, S4]. Management attributed the overall revenue increase primarily to growth in Microsoft Cloud [S4] ... Intelligent Cloud (revenue up $31.5 billion or 30%): driven by Azure and other cloud services, where revenue grew 41% ... [S3] ...",
- "citations": [{"id": "S4", "kind": "filing_text", "description": "MSFT FY2026 10-K (filed 2026-07-29), Item 7 MD&A - SUMMARY RESULTS OF OPERATIONS > Fiscal Year 2026 Compared with Fiscal Year 2025", "url": "https://www.sec.gov/Archives/edgar/data/789019/000119312526323660/msft-20260630.htm"}, "..."],
- "grounding": {"numbers_checked": 41, "unverified_numbers": [], "unknown_citations": [], "grounded": true},
- "model": "gemini-3.8-flash"}
+{"route": {"route": "both", "tickers": ["MSFT"], "rationale": "..."},
+ "tool_calls": [{"name": "get_financials", "arguments": {"tickers": ["MSFT"], "metrics": ["revenue"], "...": "..."}, "sources": ["F1"]},
+                {"name": "search_filings", "arguments": {"ticker": "MSFT", "section": "mdna", "query": "Revenue increased driven by Azure"}, "sources": ["S1", "..."]},
+                {"name": "search_filings", "arguments": {"ticker": "MSFT", "section": "mdna", "query": "revenue increased driven by"}, "sources": ["S6", "..."]}],
+ "answer": "For fiscal year 2026 (period ended June 30, 2026), Microsoft's revenue reached $331.84 billion, representing an increase of 17.8% YoY [F1] (reported in the 10-K as an increase of $50.1 billion or 18% compared to fiscal year 2025 [S3]) ... Management stated that ... [S3] ...",
+ "citations": [{"id": "F1", "kind": "financials", "description": "MSFT annual financials FY2024-FY2026 from SEC XBRL company facts (10-K accessions 0001193125-26-323660)", "...": "..."},
+               {"id": "S3", "kind": "filing_text", "description": "MSFT FY2026 10-K (filed 2026-07-29), Item 7 MD&A - ...", "url": "https://www.sec.gov/Archives/edgar/data/789019/..."}, "..."],
+ "grounding": {"numbers_checked": 32, "unverified_numbers": [], "unknown_citations": [], "grounded": true},
+ "model": "gemini-3.8-flash", "latency_ms": 7006, "usage": {"calls": 3, "prompt_tokens": 8706, "completion_tokens": 754}}
 ```
 
 Two more from the evaluation:
