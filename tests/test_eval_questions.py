@@ -86,4 +86,18 @@ def test_in_scope_response_may_recover_from_an_initial_tool_error() -> None:
 def test_out_of_scope_response_must_not_call_tools() -> None:
     response = _valid_in_scope_response()
     response.route = RouteDecision(route="out_of_scope", tickers=[])
-    assert assess_response(response, {"out_of_scope"}) == ["out-of-scope response made tool calls"]
+    assert assess_response(response, {"out_of_scope"}) == [
+        "out-of-scope response made tool calls",
+        "out-of-scope response did not use the decline template",
+    ]
+
+
+def test_out_of_scope_response_must_use_the_decline_template() -> None:
+    response = _valid_in_scope_response()
+    response.route = RouteDecision(route="out_of_scope", tickers=[])
+    response.tool_calls = []
+    response.answer = "I can't answer that from the data this service has. Quarterly data is unavailable."
+    assert assess_response(response, {"out_of_scope"}) == []
+
+    response.answer = ""
+    assert assess_response(response, {"out_of_scope"}) == ["out-of-scope response did not use the decline template"]

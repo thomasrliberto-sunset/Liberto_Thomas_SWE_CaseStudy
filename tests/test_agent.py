@@ -37,7 +37,7 @@ class FakeLLM:
 
     def chat(self, messages, tools=None, json_mode=False, model=None):
         self.calls.append(
-            {"messages": messages, "tools": [t["function"]["name"] for t in tools or []], "json_mode": json_mode}
+            {"messages": list(messages), "tools": [t["function"]["name"] for t in tools or []], "json_mode": json_mode}
         )
         step = self.script.pop(0)
         if isinstance(step, dict):  # router JSON
@@ -160,11 +160,7 @@ def test_in_scope_answer_must_use_a_successful_tool_and_cite_it():
     assert [t.name for t in resp.tool_calls] == ["get_financials"]
     assert resp.grounding is not None and resp.grounding.grounded
     assert resp.grounding.citations_checked == 1
-    assert any(
-        "successfully used a source tool" in message.get("content", "")
-        for message in llm.calls[2]["messages"]
-        if message["role"] == "user"
-    )
+    assert "successfully used a source tool" in llm.calls[2]["messages"][-1]["content"]
 
 
 def test_in_scope_answer_without_a_citation_fails_grounding():
@@ -206,6 +202,19 @@ def test_tool_evidence_is_only_the_exact_visible_payload():
     assert ledger.evidence == [text]
     assert check_grounding("The value was 100 [F1].", ledger.evidence, set(ledger.citations)).grounded
     assert not check_grounding("The value was 999 [F1].", ledger.evidence, set(ledger.citations)).grounded
+
+
+def test_tool_evidence_preserves_non_ascii_filing_text():
+    ledger = SourceLedger()
+
+    def handler(conn, args, tool_ledger):
+        source_id = tool_ledger.add("filing_text", "AAPL 10-K Item 7", ticker="AAPL")
+        return {"source_id": source_id, "text": "Net sales rose—5% on higher demand."}
+
+    spec = ToolSpec("test", "test", {}, handler, "narrative")
+    text, ok, error = run_tool(spec, None, {}, ledger)
+    assert ok and error is None and "rose—5%" in text
+    assert check_grounding("Net sales rose 5% [S1].", ledger.evidence, set(ledger.citations)).grounded
 
 
 def test_truncated_tool_values_and_sources_are_not_grounding_evidence():

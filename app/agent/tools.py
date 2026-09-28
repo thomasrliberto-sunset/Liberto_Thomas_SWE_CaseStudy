@@ -435,7 +435,7 @@ def run_tool(spec: ToolSpec, conn: DbConn, args: dict[str, Any], ledger: SourceL
     # Handlers may not broaden the evidence set with raw service objects. The
     # only admissible evidence is the final payload returned to the model.
     del ledger.evidence[evidence_before:]
-    text = json.dumps(result, default=str)
+    text = json.dumps(result, default=str, ensure_ascii=False)
     if len(text) > MAX_RESULT_CHARS:
         text = text[:MAX_RESULT_CHARS] + '..."[truncated]'
     # Only sources and figures present in the exact payload sent to the model may

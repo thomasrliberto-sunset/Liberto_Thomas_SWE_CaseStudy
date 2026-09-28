@@ -97,7 +97,9 @@ routes, tool calls, citations and grounding for each. The set is the brief's six
 variants: a cross-company comparison, insider activity, a cross-modal Eaton question, the Apple tariff
 risk narrative, a P/E ranking, and declines for Tesla, quarterly data and "should I buy".
 
-On `gemini-3.8-flash`, **14/14 pass in each of three consecutive runs (42/42)**, meaning:
+The committed transcript is the latest completed live run and passed **14/14**. The grounding checks
+were then tightened further and covered with regression tests. Three earlier stability runs also passed
+42/42 questions. In the current evaluator, a pass means:
 - the route is as expected;
 - the four out-of-scope questions are declined with zero tool calls;
 - every in-scope answer has successful tool calls and citations, and passes the grounding check.
@@ -165,14 +167,14 @@ curl -s localhost:8000/ask -H 'content-type: application/json' \
 Abridged response:
 ```json
 {"route": {"route": "both", "tickers": ["MSFT"], "rationale": "..."},
- "tool_calls": [{"name": "get_financials", "arguments": {"tickers": ["MSFT"], "metrics": ["revenue"], "...": "..."}, "sources": ["F1"]},
-                {"name": "search_filings", "arguments": {"ticker": "MSFT", "section": "mdna", "query": "Revenue increased driven by Azure"}, "sources": ["S1", "..."]},
-                {"name": "search_filings", "arguments": {"ticker": "MSFT", "section": "mdna", "query": "revenue increased driven by"}, "sources": ["S6", "..."]}],
- "answer": "For fiscal year 2026 (period ended June 30, 2026), Microsoft's revenue reached $331.84 billion, representing an increase of 17.8% YoY [F1] (reported in the 10-K as an increase of $50.1 billion or 18% compared to fiscal year 2025 [S3]) ... Management stated that ... [S3] ...",
+ "tool_calls": [{"name": "get_financials", "arguments": {"tickers": ["MSFT"], "metrics": ["revenue"], "last_n": 3}, "ok": true, "sources": ["F1"]},
+                {"name": "search_filings", "arguments": {"ticker": "MSFT", "section": "mdna", "query": "revenue increased driven by Azure Intelligent Cloud Productivity", "filing": "latest"}, "ok": true, "sources": ["S1", "..."]},
+                "... one additional search_filings call ..."],
+ "answer": "In fiscal year 2026 (ended June 30, 2026), Microsoft’s revenue reached **$331.84 billion**, representing a year-over-year increase of **17.8%** [F1] (reported in MD&A as an increase of **$50.1 billion or 18%**) [S2]. ... Management attributed the overall increase primarily to growth in **Microsoft Cloud** ... [S2, S5] ...",
  "citations": [{"id": "F1", "kind": "financials", "description": "MSFT annual financials FY2024-FY2026 from SEC XBRL company facts (10-K accessions 0001193125-26-323660)", "...": "..."},
-               {"id": "S3", "kind": "filing_text", "description": "MSFT FY2026 10-K (filed 2026-07-29), Item 7 MD&A - ...", "url": "https://www.sec.gov/Archives/edgar/data/789019/..."}, "..."],
- "grounding": {"numbers_checked": 32, "unverified_numbers": [], "unknown_citations": [], "grounded": true},
- "model": "gemini-3.8-flash", "latency_ms": 7006, "usage": {"calls": 3, "prompt_tokens": 8706, "completion_tokens": 754}}
+               {"id": "S2", "kind": "filing_text", "description": "MSFT FY2026 10-K (filed 2026-07-29), Item 7 MD&A - SUMMARY RESULTS OF OPERATIONS", "url": "https://www.sec.gov/Archives/edgar/data/789019/..."}, "..."],
+ "grounding": {"numbers_checked": 32, "citations_checked": 6, "unverified_numbers": [], "unknown_citations": [], "issues": [], "grounded": true},
+ "model": "gemini-3.8-flash", "latency_ms": 8550, "usage": {"calls": 4, "...": "..."}}
 ```
 
 Two more from the evaluation:

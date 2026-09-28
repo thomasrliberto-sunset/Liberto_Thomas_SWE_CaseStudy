@@ -52,7 +52,8 @@ Item 7 and Microsoft's run-in italic risk headings.
 shares ÷ revenue. Yahoo closes are split-adjusted to today, so EPS is divided by splits after its
 filing date. Because annual EPS can be stale, the service also computes TTM as
 `FY + current 10-Q YTD − prior-year YTD`. Split adjustment applies only to per-share EPS components,
-never revenue. The annual multiple remains the brief's headline figure.
+never revenue. The annual multiple remains the brief's headline figure. For Apple: 45.6x on EPS
+through Sep-2025, 39.0x through Jun-2026.
 
 "Highest margin last year" means **each company's latest fiscal year**, with an alignment note because
 period ends here span about 9 months.
@@ -69,7 +70,8 @@ with the configured universe makes unknown companies out-of-scope.
 It is not used for ingestion, parsing, metrics, arithmetic, or risk-factor comparison. Tools return
 computed values, while a deterministic heading/body-similarity diff finds new risks. Out-of-scope
 answers use a fixed template. A final deterministic pass verifies figures (including rounded and
-scaled values) and citation IDs against the tool payloads actually shown to the model.
+scaled values) and citation IDs against the tool payloads actually shown to the model. If the model
+answers before a tool succeeds, it gets one reminder and then the request fails closed.
 
 Other guards cover unknown tickers, tool errors, bounded tool loops, and provider 429/5xx responses.
 Fallback models restart the whole question so one answer never mixes models. Responses report
@@ -77,8 +79,9 @@ latency, calls, and token use.
 
 **Evaluation.** Fourteen questions cover the brief and eight variants. In-scope answers require the
 expected route, successful tools, citations and grounding; four out-of-scope questions require zero
-tools. `gemini-3.8-flash` passed three consecutive runs (42/42). The set caught model-computed
-cross-company arithmetic and a filing-table extraction bug (`$ | 604`), both since fixed.
+tools. The latest live transcript passed 14/14; further grounding hardening is regression-tested.
+Three earlier stability runs passed 42/42. The set caught model-computed cross-company arithmetic and
+a filing-table extraction bug (`$ | 604`), both since fixed.
 
 **Known weak spots:** grounding does not verify paraphrase or neutralize adversarial instructions in
 filing text, and keyword FTS misses synonyms.

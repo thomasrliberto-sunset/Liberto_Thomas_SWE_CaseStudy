@@ -51,6 +51,8 @@ def assess_response(response: AskResponse, expected_routes: set[str]) -> list[st
     if response.route.route == "out_of_scope":
         if response.tool_calls:
             failures.append("out-of-scope response made tool calls")
+        if not response.answer.startswith("I can't answer that from the data this service has."):
+            failures.append("out-of-scope response did not use the decline template")
         return failures
 
     if not response.answer.strip():
