@@ -8,6 +8,7 @@ rather than silently trusting the prose.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any
 
@@ -21,6 +22,13 @@ _NUM = re.compile(
 _CITE_BLOCK = re.compile(r"\[([A-Z]\d+(?:\s*[,;]\s*[A-Z]\d+)*)\]")
 _DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _FISCAL = re.compile(r"\b(?:FY|fiscal(?: year)?\s*)'?\d{2,4}\b", re.I)
+_FORM = re.compile(r"\b(?:10-[KQ]|8-K)\b", re.I)
+_BARE_NUM = re.compile(r"(?<![\w.])(\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?)(?![\w.])")
+_IN_MILLIONS = re.compile(r"\bin\s+millions?\b", re.I)
+_EXPLICIT_UNIT = re.compile(
+    r"\s*(?:%|percent\b|pp\b|percentage points?\b|trillion\b|billion\b|million\b|thousand\b|[TBMK]\b|x\b)",
+    re.I,
+)
 
 SCALE = {"trillion": 1e12, "t": 1e12, "billion": 1e9, "b": 1e9, "million": 1e6, "m": 1e6, "thousand": 1e3, "k": 1e3}
 
@@ -66,12 +74,29 @@ def evidence_numbers(obj: Any) -> list[float]:
         if isinstance(x, (int, float)):
             found.append(float(x))
         elif isinstance(x, str):
+            structured_payload = x.lstrip().startswith(("{", "["))
+            if structured_payload:
+                try:
+                    walk(json.loads(x))
+                    return
+                except json.JSONDecodeError:
+                    pass  # a size-limited payload can be deliberately truncated
             for _, cands in extract_numbers(x, keep_all=True):
                 found.extend(v for v, _ in cands)
-            # MD&A tables are usually "(In millions)" with bare numbers: '$604' may be cited as '$604 million'
-            for m in re.finditer(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?", x):
-                v = float(m.group(0).replace(",", ""))
-                found.extend([v, v * 1e6])
+            if structured_payload:
+                return  # never infer "millions" from bare JSON numbers
+            # MD&A tables often show "(In millions)" and bare cells. A rejoined
+            # '$604' cell may likewise be reported as '$604 million'. Do not infer
+            # that scale from dates, form names, citation ids, or ordinary counts.
+            bare_text = _FORM.sub(" ", _FISCAL.sub(" ", _DATE.sub(" ", x)))
+            in_millions = bool(_IN_MILLIONS.search(bare_text))
+            for m in _BARE_NUM.finditer(bare_text):
+                if _EXPLICIT_UNIT.match(bare_text[m.end() :]):
+                    continue  # already represented at its explicit scale by extract_numbers()
+                v = float(m.group(1).replace(",", ""))
+                found.append(v)
+                if in_millions or (m.start() > 0 and bare_text[m.start() - 1] == "$"):
+                    found.append(v * 1e6)
         elif isinstance(x, dict):
             for v in x.values():
                 walk(v)
@@ -99,11 +124,18 @@ def check_grounding(answer: str, evidence: list[Any], known_citations: set[str])
     unverified = [tok for tok, cands in numbers if not _matches(cands, ev)]
     cited = {c.strip() for block in _CITE_BLOCK.findall(answer) for c in re.split(r"[,;]", block)}
     unknown = sorted(c for c in cited if c not in known_citations)
+    issues = []
+    if not evidence:
+        issues.append("no successful tool evidence")
+    if not cited:
+        issues.append("answer cites no tool source")
     return GroundingReport(
         numbers_checked=len(numbers),
+        citations_checked=len(cited),
         unverified_numbers=list(dict.fromkeys(unverified)),
         unknown_citations=unknown,
-        grounded=not unverified and not unknown,
+        issues=issues,
+        grounded=not unverified and not unknown and not issues,
     )
 
 

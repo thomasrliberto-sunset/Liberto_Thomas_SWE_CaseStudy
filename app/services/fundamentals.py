@@ -159,6 +159,10 @@ def compare_metric(
         "SELECT id, ticker FROM company WHERE %s::text[] IS NULL OR ticker = ANY(%s) ORDER BY ticker",
         (tickers, tickers),
     ).fetchall()
+    if tickers:
+        unknown = sorted(set(tickers) - {row["ticker"] for row in rows})
+        if unknown:
+            raise BadRequest(f"unknown tickers {unknown}")
     if not rows:
         raise NotFound("no matching companies")
 

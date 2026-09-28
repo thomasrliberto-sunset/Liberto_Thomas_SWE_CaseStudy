@@ -57,7 +57,9 @@ To reset to the snapshot, run `docker compose down -v && docker compose up`.
 **Model used:** Google **`gemini-3.8-flash`** (paid tier) through Google AI Studio's OpenAI-compatible
 endpoint (`https://generativelanguage.googleapis.com/v1beta/openai/`), with `temperature: 0`. It passes
 all 14 questions in [docs/eval_results.md](docs/eval_results.md).
-- `gemini-2.5-flash`, the brief's suggestion, is no longer available to new API keys.
+- Google [limits `gemini-2.5-flash` access](https://ai.google.dev/gemini-api/docs/deprecations) to
+  existing active users and directs new projects to newer models, so this submission uses
+  `gemini-3.8-flash`.
 - During development the same questions also passed on `gemini-3.5-flash-lite`. The agent doesn't lean
   on model strength: routing is constrained, and the arithmetic and diffs are done in code.
 
@@ -98,9 +100,9 @@ risk narrative, a P/E ranking, and declines for Tesla, quarterly data and "shoul
 On `gemini-3.8-flash`, **14/14 pass in each of three consecutive runs (42/42)**, meaning:
 - the route is as expected;
 - the four out-of-scope questions are declined with zero tool calls;
-- no answer contains a number the tools didn't return.
+- every in-scope answer has successful tool calls and citations, and passes the grounding check.
 
-Rerun the evaluation with `docker compose exec api python scripts/eval_questions.py --write`.
+Rerun the evaluation with `make eval`.
 
 ### REST
 

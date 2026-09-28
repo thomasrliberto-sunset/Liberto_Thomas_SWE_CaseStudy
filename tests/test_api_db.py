@@ -80,3 +80,7 @@ def test_quality_report_discloses_fallbacks(client):
 def test_errors(client):
     assert client.get("/companies/TSLA/fundamentals").status_code == 404
     assert client.get("/compare/not_a_metric").status_code == 400
+    assert client.get("/companies/NVDA/fundamentals", params={"fiscal_years": "2025,not-a-year"}).status_code == 400
+    unknown_ticker = client.get("/compare/revenue", params={"tickers": "NVDA,TSLA"})
+    assert unknown_ticker.status_code == 400
+    assert unknown_ticker.json()["detail"] == "unknown tickers ['TSLA']"

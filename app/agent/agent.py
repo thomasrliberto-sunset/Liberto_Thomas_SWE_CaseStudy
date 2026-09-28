@@ -176,10 +176,28 @@ class Agent:
             {"role": "user", "content": question},
         ]
         traces: list[ToolCallTrace] = []
-        for _ in range(self.max_tool_rounds):
+        tool_rounds = 0
+        reminded_to_use_tools = False
+        while tool_rounds < self.max_tool_rounds:
             result = meter.chat(messages, tools=schemas, model=model)
             if not result.tool_calls:
+                if not any(t.ok for t in traces):
+                    if reminded_to_use_tools:
+                        raise LLMError("model answered without using an available source tool")
+                    messages.append(result.raw_message)
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "You have not successfully used a source tool yet. Call at least one of the "
+                                "provided tools before answering; do not answer from memory."
+                            ),
+                        }
+                    )
+                    reminded_to_use_tools = True
+                    continue
                 return (result.content or "").strip(), traces
+            tool_rounds += 1
             messages.append(result.raw_message)
             for call in result.tool_calls:
                 spec = tools.get(call.name)
@@ -206,7 +224,10 @@ class Agent:
                 )
                 messages.append({"role": "tool", "tool_call_id": call.id, "content": content})
 
-        # Out of rounds: ask for a final answer with what has been gathered.
+        if not any(t.ok for t in traces):
+            raise LLMError("no source tool completed successfully")
+
+        # Out of tool rounds: ask for a final answer with what has been gathered.
         messages.append({"role": "user", "content": "Answer now using only the tool results above."})
         result = meter.chat(messages, model=model)
         return (result.content or "").strip(), traces

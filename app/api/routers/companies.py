@@ -5,7 +5,7 @@ from datetime import date
 from fastapi import APIRouter, Query
 
 from app.api.deps import Conn, csv_list
-from app.models import CompanySummary, Fundamentals, InsiderSummary, PriceSeries, Valuation
+from app.models import BadRequest, CompanySummary, Fundamentals, InsiderSummary, PriceSeries, Valuation
 from app.services import companies, fundamentals, insiders, market, quality
 
 router = APIRouter(prefix="/companies", tags=["companies"])
@@ -24,7 +24,10 @@ def get_fundamentals(
     fiscal_years: str | None = Query(None, description="Comma-separated fiscal years, e.g. 2024,2025"),
     last_n: int = Query(5, ge=1, le=20, description="Most recent N fiscal years (ignored if fiscal_years set)"),
 ):
-    years = [int(y) for y in csv_list(fiscal_years) or []] or None
+    try:
+        years = [int(y) for y in csv_list(fiscal_years) or []] or None
+    except ValueError as exc:
+        raise BadRequest("fiscal_years must be a comma-separated list of integer years") from exc
     return fundamentals.get_fundamentals(conn, ticker, csv_list(metrics), years, last_n)
 
 

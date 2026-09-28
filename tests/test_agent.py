@@ -9,8 +9,8 @@ import pytest
 from app.agent import agent as agent_mod
 from app.agent.agent import Agent
 from app.agent.grounding import check_grounding, extract_numbers
-from app.agent.llm import ChatResult, ToolCall
-from app.agent.tools import ToolSpec
+from app.agent.llm import ChatResult, LLMError, ToolCall
+from app.agent.tools import MAX_RESULT_CHARS, SourceLedger, ToolSpec, run_tool
 from app.models import CompanySummary
 
 COMPANIES = [
@@ -59,13 +59,11 @@ class FakeLLM:
 
 def fake_tools(_tickers):
     def fin(conn, args, ledger):
-        ledger.evidence.append({"revenue": 281_724_000_000, "yoy_growth": 0.1493})
         sid = ledger.add("financials", "MSFT annual financials", ticker="MSFT")
         return {"source_id": sid, "rows": [{"fiscal_year": 2025, "revenue": "$281.72B (YoY +14.9%)"}]}
 
     def search(conn, args, ledger):
         text = "Revenue increased $36.6 billion or 15% driven by growth in Microsoft Cloud."
-        ledger.evidence.append([{"text": text}])
         sid = ledger.add("filing_text", "MSFT FY2025 10-K Item 7", ticker="MSFT", excerpt=text)
         return [{"source_id": sid, "text": text}]
 
@@ -138,11 +136,95 @@ def test_numbers_route_cannot_use_text_tools():
             {"route": "numbers", "tickers": ["MSFT"], "rationale": "revenue"},
             [("search_filings", {"ticker": "MSFT", "query": "x"})],
             "I could not retrieve that.",
+            [("get_financials", {"tickers": ["MSFT"]})],
+            "Revenue was $281.72B in FY2025 [F1].",
         ]
     )
     resp = Agent(llm).ask(None, "MSFT revenue?")
     assert llm.calls[1]["tools"] == ["get_financials"]
     assert resp.tool_calls[0].ok is False and resp.tool_calls[0].error == "not available"
+    assert resp.tool_calls[1].ok is True
+    assert resp.grounding is not None and resp.grounding.grounded
+
+
+def test_in_scope_answer_must_use_a_successful_tool_and_cite_it():
+    llm = FakeLLM(
+        [
+            {"route": "numbers", "tickers": ["MSFT"], "rationale": "revenue"},
+            "Microsoft's revenue grew strongly.",
+            [("get_financials", {"tickers": ["MSFT"]})],
+            "Revenue was $281.72B in FY2025 [F1].",
+        ]
+    )
+    resp = Agent(llm).ask(None, "What was MSFT revenue?")
+    assert [t.name for t in resp.tool_calls] == ["get_financials"]
+    assert resp.grounding is not None and resp.grounding.grounded
+    assert resp.grounding.citations_checked == 1
+    assert any(
+        "successfully used a source tool" in message.get("content", "")
+        for message in llm.calls[2]["messages"]
+        if message["role"] == "user"
+    )
+
+
+def test_in_scope_answer_without_a_citation_fails_grounding():
+    llm = FakeLLM(
+        [
+            {"route": "numbers", "tickers": ["MSFT"], "rationale": "revenue"},
+            [("get_financials", {"tickers": ["MSFT"]})],
+            "Revenue was $281.72B in FY2025.",
+        ]
+    )
+    resp = Agent(llm).ask(None, "What was MSFT revenue?")
+    assert resp.grounding is not None and not resp.grounding.grounded
+    assert resp.grounding.issues == ["answer cites no tool source"]
+
+
+def test_in_scope_answer_that_ignores_tool_reminder_fails_closed():
+    llm = FakeLLM(
+        [
+            {"route": "numbers", "tickers": ["MSFT"], "rationale": "revenue"},
+            "Revenue grew strongly.",
+            "I will answer from memory instead.",
+        ]
+    )
+    with pytest.raises(LLMError, match="without using"):
+        Agent(llm).ask(None, "What was MSFT revenue?")
+
+
+def test_tool_evidence_is_only_the_exact_visible_payload():
+    ledger = SourceLedger()
+
+    def handler(conn, args, tool_ledger):
+        tool_ledger.evidence.append({"hidden": 999})
+        source_id = tool_ledger.add("financials", "visible source")
+        return {"source_id": source_id, "visible": 100}
+
+    spec = ToolSpec("test", "test", {}, handler, "numbers")
+    text, ok, error = run_tool(spec, None, {}, ledger)
+    assert ok and error is None
+    assert ledger.evidence == [text]
+    assert check_grounding("The value was 100 [F1].", ledger.evidence, set(ledger.citations)).grounded
+    assert not check_grounding("The value was 999 [F1].", ledger.evidence, set(ledger.citations)).grounded
+
+
+def test_truncated_tool_values_and_sources_are_not_grounding_evidence():
+    ledger = SourceLedger()
+
+    def handler(conn, args, tool_ledger):
+        first = tool_ledger.add("financials", "visible source")
+        second = tool_ledger.add("financials", "truncated source")
+        return [
+            {"source_id": first, "value": 100, "padding": "x" * MAX_RESULT_CHARS},
+            {"source_id": second, "value": 999},
+        ]
+
+    spec = ToolSpec("test", "test", {}, handler, "numbers")
+    text, ok, error = run_tool(spec, None, {}, ledger)
+    assert ok and error is None and text.endswith('..."[truncated]')
+    assert set(ledger.citations) == {"F1"}
+    assert check_grounding("The value was 100 [F1].", ledger.evidence, set(ledger.citations)).grounded
+    assert not check_grounding("The value was 999 [F2].", ledger.evidence, set(ledger.citations)).grounded
 
 
 def test_grounding_flags_invented_numbers_and_citations():
@@ -153,6 +235,35 @@ def test_grounding_flags_invented_numbers_and_citations():
     assert not bad.grounded
     assert bad.unverified_numbers == ["$300 billion", "$85B"]
     assert bad.unknown_citations == ["F9"]
+
+
+def test_grounding_requires_evidence_and_a_citation():
+    report = check_grounding("Microsoft's cloud business grew strongly.", [], set())
+    assert not report.grounded
+    assert report.issues == ["no successful tool evidence", "answer cites no tool source"]
+
+
+def test_explicit_billions_do_not_ground_the_same_number_of_millions():
+    evidence = ['{"revenue": "$281.72B"}']
+    assert check_grounding("Revenue was $281.72 billion [F1].", evidence, {"F1"}).grounded
+    assert not check_grounding("Revenue was $281.72 million [F1].", evidence, {"F1"}).grounded
+
+
+def test_bare_json_numbers_are_not_assumed_to_be_millions():
+    evidence = ['{"value": 100}']
+    assert check_grounding("The value was 100 [F1].", evidence, {"F1"}).grounded
+    assert not check_grounding("The value was $100 million [F1].", evidence, {"F1"}).grounded
+
+
+def test_dates_forms_and_source_ids_do_not_create_million_scale_evidence():
+    evidence = ['{"source_id": "F1", "period_end": "2025-06-30", "form": "10-K"}']
+    assert not check_grounding("The value was $1 million [F1].", evidence, {"F1"}).grounded
+    assert not check_grounding("The value was $30 million [F1].", evidence, {"F1"}).grounded
+
+
+def test_bare_table_dollars_can_be_reported_in_millions():
+    evidence = ['{"text": "Revenue (in millions) | $604"}']
+    assert check_grounding("Revenue was $604 million [F1].", evidence, {"F1"}).grounded
 
 
 def test_number_extraction_ignores_years_dates_and_small_counts():

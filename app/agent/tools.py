@@ -28,7 +28,7 @@ class SourceLedger:
     so the answer's citations and numbers can be checked afterwards."""
 
     citations: dict[str, Citation] = field(default_factory=dict)
-    evidence: list[Any] = field(default_factory=list)  # raw tool outputs, for number grounding
+    evidence: list[str] = field(default_factory=list)  # exact serialized tool payloads shown to the model
     _counters: dict[str, int] = field(default_factory=dict)
 
     PREFIX: ClassVar[dict[str, str]] = {
@@ -95,7 +95,6 @@ def _get_financials(conn, args, ledger: SourceLedger):
         f = fundamentals.get_fundamentals(
             conn, ticker, args.get("metrics"), args.get("fiscal_years"), args.get("last_n", 3)
         )
-        ledger.evidence.append(f.model_dump(mode="json"))
         accessions = sorted({p.accession for p in f.periods if p.accession})
         sid = ledger.add(
             "financials",
@@ -127,7 +126,6 @@ def _get_financials(conn, args, ledger: SourceLedger):
 
 def _compare(conn, args, ledger: SourceLedger):
     c = fundamentals.compare_metric(conn, args["metric"], args.get("fiscal_year"), args.get("tickers"))
-    ledger.evidence.append(c.model_dump(mode="json"))
     sid = ledger.add("comparison", f"{c.label} ranking, {c.basis} (SEC XBRL)")
     return {
         "source_id": sid,
@@ -152,7 +150,6 @@ def _valuation(conn, args, ledger: SourceLedger):
     out = []
     for ticker in args["tickers"]:
         v = market.get_valuation(conn, ticker)
-        ledger.evidence.append(v.model_dump(mode="json"))
         sid = ledger.add(
             "valuation",
             f"{v.ticker} trailing P/E & P/S: {v.price_source} close {v.price_date} x FY{v.eps_fiscal_year} "
@@ -191,7 +188,6 @@ def _valuation(conn, args, ledger: SourceLedger):
 
 def _prices(conn, args, ledger: SourceLedger):
     p = market.get_prices(conn, args["ticker"], args.get("start_date"), args.get("end_date"), include_bars=False)
-    ledger.evidence.append(p.model_dump(mode="json"))
     sid = ledger.add("prices", f"{p.ticker} daily prices {p.start}..{p.end} ({p.source})", ticker=p.ticker)
     return {
         "source_id": sid,
@@ -208,7 +204,6 @@ def _prices(conn, args, ledger: SourceLedger):
 
 def _insiders(conn, args, ledger: SourceLedger):
     s = insiders.insider_summary(conn, args["ticker"], args.get("days", 365))
-    ledger.evidence.append(s.model_dump(mode="json"))
     sid = ledger.add("insiders", f"{s.ticker} SEC Form 4 filings {s.window_start}..{s.window_end}", ticker=s.ticker)
     return {
         "source_id": sid,
@@ -235,7 +230,6 @@ def _search(conn, args, ledger: SourceLedger):
     hits = filings.search_filings(
         conn, args["ticker"], args["query"], args.get("section"), which, None, min(args.get("limit", 5), 8)
     )
-    ledger.evidence.append([h.model_dump(mode="json") for h in hits])
     out = []
     for h in hits:
         section = "Item 1A Risk Factors" if h.item == "1A" else "Item 7 MD&A"
@@ -261,7 +255,6 @@ def _search(conn, args, ledger: SourceLedger):
 
 def _risk_diff(conn, args, ledger: SourceLedger):
     d = filings.diff_risk_factors(conn, args["ticker"])
-    ledger.evidence.append(d.model_dump(mode="json"))
     sid = ledger.add(
         "risk_diff",
         f"{d.ticker} Item 1A risk factors: FY{d.latest.fiscal_year} 10-K vs FY{d.prior.fiscal_year} 10-K",
@@ -421,14 +414,34 @@ def run_tool(spec: ToolSpec, conn: DbConn, args: dict[str, Any], ledger: SourceL
     """-> (content for the model, ok, error). Errors go back to the model so it can adapt."""
     if "__invalid_json__" in args:
         return json.dumps({"error": "arguments were not valid JSON"}), False, "invalid JSON arguments"
+    citations_before = set(ledger.citations)
+    counters_before = ledger._counters.copy()
+    evidence_before = len(ledger.evidence)
+
+    def rollback_sources() -> None:
+        for cid in set(ledger.citations) - citations_before:
+            del ledger.citations[cid]
+        ledger._counters = counters_before
+        del ledger.evidence[evidence_before:]
+
     try:
         result = spec.handler(conn, args, ledger)
     except (NotFound, BadRequest) as exc:
+        rollback_sources()
         return json.dumps({"error": str(exc)}), False, str(exc)
     except (KeyError, TypeError, ValueError) as exc:
+        rollback_sources()
         return json.dumps({"error": f"bad arguments: {exc}"}), False, f"bad arguments: {exc}"
-    ledger.evidence.append(result)  # the formatted view the model saw (e.g. '29%') is evidence too
+    # Handlers may not broaden the evidence set with raw service objects. The
+    # only admissible evidence is the final payload returned to the model.
+    del ledger.evidence[evidence_before:]
     text = json.dumps(result, default=str)
     if len(text) > MAX_RESULT_CHARS:
         text = text[:MAX_RESULT_CHARS] + '..."[truncated]'
+    # Only sources and figures present in the exact payload sent to the model may
+    # be used to validate its answer. A large result can be truncated mid-list.
+    for cid in set(ledger.citations) - citations_before:
+        if f'"source_id": {json.dumps(cid)}' not in text:
+            del ledger.citations[cid]
+    ledger.evidence.append(text)
     return text, True, None

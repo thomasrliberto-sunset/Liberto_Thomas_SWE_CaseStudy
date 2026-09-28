@@ -289,8 +289,10 @@ class Citation(BaseModel):
 
 class GroundingReport(BaseModel):
     numbers_checked: int
+    citations_checked: int = 0
     unverified_numbers: list[str]
     unknown_citations: list[str]
+    issues: list[str] = Field(default_factory=list)
     grounded: bool
 
 
