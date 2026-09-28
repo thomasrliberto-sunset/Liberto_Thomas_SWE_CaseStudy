@@ -49,8 +49,10 @@ def companies(client):
     return {company["ticker"]: company for company in response.json()}
 
 
-def test_snapshot_contains_exact_required_universe(companies):
-    assert set(companies) == set(TICKERS)
+def test_snapshot_covers_the_required_universe(companies):
+    # A superset, not equality: adding a ticker in config/universe.yaml and re-ingesting
+    # is a supported config change and must not break this contract.
+    assert set(companies) >= set(TICKERS)
 
 
 @pytest.mark.parametrize("ticker", TICKERS)
