@@ -74,6 +74,8 @@ def fetch_yfinance(ticker: str, start: date) -> PriceHistory:
         ratio = _num(row.get("Stock Splits"))
         if ratio and ratio > 0:
             splits.append(Split(date=d, ratio=ratio))
+    if not bars:
+        raise RuntimeError(f"yfinance returned no usable rows for {ticker}")
     return PriceHistory(source="yahoo", bars=bars, splits=splits)
 
 
@@ -98,6 +100,8 @@ def fetch_stooq(ticker: str, start: date) -> PriceHistory:
         for r in rows
         if _num(r.get("Close")) is not None
     ]
+    if not bars:
+        raise RuntimeError(f"stooq returned no usable data for {ticker}")
     return PriceHistory(source="stooq", bars=bars, splits=[])
 
 

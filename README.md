@@ -198,7 +198,8 @@ app/
 config/        universe.yaml, metrics.yaml
 db/init/       01_schema.sql (DDL), 02_seed.sql.gz (snapshot)
 scripts/       export_seed.py (DB -> snapshot), eval_questions.py (/ask evaluation set)
-tests/         unit tests (parsers, normalization, metrics, TTM, diff, agent with a fake LLM) + API tests
+tests/         parsers, normalization, metrics, LLM/tool safety and provider fallbacks;
+               seeded-Postgres API, snapshot-contract and ingestion tests
 docs/          DESIGN.md, eval_results.md
 .github/       CI: lint + types + tests on Postgres 16, and a docker compose smoke test
 ```

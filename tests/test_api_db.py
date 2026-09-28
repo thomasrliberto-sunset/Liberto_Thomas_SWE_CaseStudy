@@ -84,3 +84,46 @@ def test_errors(client):
     unknown_ticker = client.get("/compare/revenue", params={"tickers": "NVDA,TSLA"})
     assert unknown_ticker.status_code == 400
     assert unknown_ticker.json()["detail"] == "unknown tickers ['TSLA']"
+
+
+def test_prices_window_and_summary(client):
+    response = client.get("/companies/AAPL/prices", params={"start": "2025-01-01", "end": "2025-12-31"})
+    assert response.status_code == 200
+    p = response.json()
+    bars = p["bars"]
+    assert bars and "2025-01-01" <= p["start"] <= p["end"] <= "2025-12-31"
+    assert [b["date"] for b in bars] == sorted(b["date"] for b in bars)
+    assert (p["first_close"], p["last_close"]) == (bars[0]["close"], bars[-1]["close"])
+    assert p["change_pct"] == pytest.approx((p["last_close"] / p["first_close"] - 1) * 100)
+    assert p["high"] == max(b["high"] for b in bars if b["high"] is not None)
+    assert p["low"] == min(b["low"] for b in bars if b["low"] is not None)
+    assert client.get("/companies/AAPL/prices", params={"start": "1990-01-01", "end": "1990-12-31"}).status_code == 404
+
+
+def test_insider_summary_is_internally_consistent(client):
+    s = client.get("/companies/NVDA/insiders").json()
+    assert s["window_start"] < s["window_end"]  # anchored on the last ingest, not the wall clock
+    assert s["open_market_sales"] > 0
+    assert s["net_open_market_value"] == pytest.approx(s["open_market_buy_value"] - s["open_market_sale_value"])
+    assert 0 <= s["sale_value_under_10b5_1_pct"] <= 100
+    values = [t["value"] for t in s["top_sellers"]]
+    assert 0 < len(values) <= 5 and values == sorted(values, reverse=True)
+    assert sum(values) <= s["open_market_sale_value"] * (1 + 1e-9)
+    assert client.get("/companies/NVDA/insiders", params={"days": 3}).status_code == 422
+
+
+def test_ask_without_an_llm_key_returns_503_and_the_rest_still_works(client, monkeypatch):
+    from app.api.routers import ask as ask_router
+    from app.config import get_settings
+
+    monkeypatch.setenv("LLM_API_KEY", "")
+    get_settings.cache_clear()
+    ask_router.get_agent.cache_clear()
+    try:
+        r = client.post("/ask", json={"question": "What is AAPL's trailing P/E right now?"})
+        assert r.status_code == 503 and "LLM_API_KEY" in r.json()["detail"]
+        assert client.get("/health").json()["llm_configured"] is False
+        assert client.get("/companies/AAPL/valuation").status_code == 200
+    finally:
+        get_settings.cache_clear()
+        ask_router.get_agent.cache_clear()

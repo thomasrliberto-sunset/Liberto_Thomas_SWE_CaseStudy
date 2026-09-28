@@ -141,15 +141,16 @@ class Agent:
         # Never trust the model's ticker list blindly: constrain it to the configured universe.
         requested = [t.upper() for t in decision.tickers]
         valid = [t for t in dict.fromkeys(requested) if t in universe]
-        unknown = [t for t in requested if t not in universe]
+        unknown = [t for t in dict.fromkeys(requested) if t not in universe]
         decision.tickers = valid
-        if decision.route != "out_of_scope" and not valid:
+        if decision.route != "out_of_scope" and unknown:
             decision.route = "out_of_scope"
             decision.out_of_scope_reason = (
                 f"{', '.join(unknown)} {'is' if len(unknown) == 1 else 'are'} not in the tracked universe."
-                if unknown
-                else "The question doesn't identify which tracked company it is about."
             )
+        elif decision.route != "out_of_scope" and not valid:
+            decision.route = "out_of_scope"
+            decision.out_of_scope_reason = "The question doesn't identify which tracked company it is about."
         return decision
 
     # ------------------------------------------------------------------ tool loop

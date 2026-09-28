@@ -131,7 +131,10 @@ class OpenAICompatibleChat:
                 status, wait = "transport error", delay
             else:
                 if resp.status_code == 200:
-                    return resp.json()
+                    try:
+                        return resp.json()
+                    except ValueError as exc:
+                        raise LLMError(f"LLM returned invalid JSON: {resp.text[:300]}") from exc
                 if resp.status_code not in (429, 500, 502, 503, 504):
                     raise LLMError(f"LLM returned {resp.status_code}: {resp.text[:500]}")
                 status, wait = str(resp.status_code), delay

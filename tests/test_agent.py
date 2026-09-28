@@ -9,9 +9,9 @@ import pytest
 from app.agent import agent as agent_mod
 from app.agent.agent import Agent
 from app.agent.grounding import check_grounding, extract_numbers
-from app.agent.llm import ChatResult, LLMError, ToolCall
+from app.agent.llm import ChatResult, LLMError, LLMUnavailable, ToolCall
 from app.agent.tools import MAX_RESULT_CHARS, SourceLedger, ToolSpec, run_tool
-from app.models import CompanySummary
+from app.models import BadRequest, CompanySummary
 
 COMPANIES = [
     CompanySummary(
@@ -37,9 +37,16 @@ class FakeLLM:
 
     def chat(self, messages, tools=None, json_mode=False, model=None):
         self.calls.append(
-            {"messages": list(messages), "tools": [t["function"]["name"] for t in tools or []], "json_mode": json_mode}
+            {
+                "messages": list(messages),
+                "tools": [t["function"]["name"] for t in tools or []],
+                "json_mode": json_mode,
+                "model": model,
+            }
         )
         step = self.script.pop(0)
+        if isinstance(step, Exception):
+            raise step
         if isinstance(step, dict):  # router JSON
             return ChatResult(content=json.dumps(step), tool_calls=[], raw_message={"role": "assistant"})
         if isinstance(step, list):  # tool calls
@@ -101,6 +108,15 @@ def test_unknown_ticker_is_forced_out_of_scope():
     llm = FakeLLM([{"route": "numbers", "tickers": ["TSLA"], "rationale": "revenue"}])
     resp = Agent(llm).ask(None, "What was Tesla's revenue?")
     assert resp.route.route == "out_of_scope"
+    assert "TSLA is not in the tracked universe" in resp.answer
+
+
+def test_mixed_known_and_unknown_tickers_are_declined_instead_of_partially_answered():
+    llm = FakeLLM([{"route": "numbers", "tickers": ["NVDA", "TSLA"], "rationale": "compare revenue"}])
+    resp = Agent(llm).ask(None, "Compare NVDA and Tesla revenue.")
+    assert resp.route.route == "out_of_scope"
+    assert resp.route.tickers == ["NVDA"]
+    assert resp.tool_calls == []
     assert "TSLA is not in the tracked universe" in resp.answer
 
 
@@ -204,6 +220,41 @@ def test_tool_evidence_is_only_the_exact_visible_payload():
     assert not check_grounding("The value was 999 [F1].", ledger.evidence, set(ledger.citations)).grounded
 
 
+def test_failed_tool_rolls_back_sources_evidence_and_citation_counter():
+    ledger = SourceLedger()
+
+    def failing_handler(conn, args, tool_ledger):
+        tool_ledger.add("financials", "must be rolled back")
+        tool_ledger.evidence.append("hidden partial evidence")
+        raise BadRequest("bad request")
+
+    failing = ToolSpec("test", "test", {}, failing_handler, "numbers")
+    text, ok, error = run_tool(failing, None, {}, ledger)
+    assert not ok and error == "bad request" and json.loads(text) == {"error": "bad request"}
+    assert ledger.citations == {} and ledger.evidence == [] and ledger._counters == {}
+
+    def successful_handler(conn, args, tool_ledger):
+        source_id = tool_ledger.add("financials", "visible source")
+        return {"source_id": source_id, "value": 100}
+
+    successful = ToolSpec("test", "test", {}, successful_handler, "numbers")
+    text, ok, error = run_tool(successful, None, {}, ledger)
+    assert ok and error is None and json.loads(text)["source_id"] == "F1"
+
+
+def test_visible_source_matching_does_not_confuse_f1_with_f10():
+    ledger = SourceLedger()
+
+    def handler(conn, args, tool_ledger):
+        source_ids = [tool_ledger.add("financials", f"source {i}") for i in range(1, 11)]
+        return {"source_id": source_ids[-1], "value": 100}
+
+    spec = ToolSpec("test", "test", {}, handler, "numbers")
+    text, ok, error = run_tool(spec, None, {}, ledger)
+    assert ok and error is None and json.loads(text)["source_id"] == "F10"
+    assert set(ledger.citations) == {"F10"}
+
+
 def test_tool_evidence_preserves_non_ascii_filing_text():
     ledger = SourceLedger()
 
@@ -281,8 +332,6 @@ def test_number_extraction_ignores_years_dates_and_small_counts():
 
 
 def test_rate_limited_model_falls_back_to_next_model_for_the_whole_question():
-    from app.agent.llm import LLMUnavailable
-
     class FlakyLLM(FakeLLM):
         models = ["primary", "fallback"]
 
@@ -294,3 +343,31 @@ def test_rate_limited_model_falls_back_to_next_model_for_the_whole_question():
     llm = FlakyLLM([{"route": "out_of_scope", "tickers": [], "rationale": "x", "out_of_scope_reason": "No."}])
     resp = Agent(llm).ask(None, "What's the price target?")
     assert resp.model == "fallback" and resp.route.route == "out_of_scope"
+
+
+def test_fallback_restarts_routing_after_a_mid_question_failure():
+    llm = FakeLLM(
+        [
+            {"route": "numbers", "tickers": ["MSFT"], "rationale": "revenue"},
+            [("get_financials", {"tickers": ["MSFT"]})],
+            LLMUnavailable("primary overloaded after tool use"),
+            {"route": "numbers", "tickers": ["MSFT"], "rationale": "revenue"},
+            [("get_financials", {"tickers": ["MSFT"]})],
+            "Revenue was $281.72B in FY2025 [F1].",
+        ]
+    )
+    llm.models = ["primary", "fallback"]
+
+    resp = Agent(llm).ask(None, "What was MSFT revenue?")
+
+    assert resp.model == "fallback"
+    assert [call["model"] for call in llm.calls] == [
+        "primary",
+        "primary",
+        "primary",
+        "fallback",
+        "fallback",
+        "fallback",
+    ]
+    assert [trace.name for trace in resp.tool_calls] == ["get_financials"]
+    assert [citation.id for citation in resp.citations] == ["F1"]
